@@ -1406,13 +1406,15 @@ def write_profile_html(stats, archetype, quote, scores):
     per_sess = round(b["delegate_actions"] / sess, 1)
     git_pct = f'{vel["git_repos_with_commits"]}/{vel["git_repos_seen"]}'
 
+    # The coral left-bar (flag=True) means exactly one thing: "this is an action item."
+    # It is used ONLY on the Growth-edge cards. Signature-move and What-we-noticed cards
+    # are descriptive, so they stay plain — no flags here.
     cards = [
         _card("How much did you ship?", "Three numbers, honestly",
               f'{vel["tool_churn_edit_write"]:,} lines via Edit/Write, ~{vel["shell_authored_lines_est"]:,} more in the shell — '
-              f'but git-committed (gold standard) only <b>{vel["git_churn_total"]:,}</b> across {git_pct} repos on disk.', flag=True),
+              f'but git-committed (gold standard) only <b>{vel["git_churn_total"]:,}</b> across {git_pct} repos on disk.'),
         _card("Iteration depth", f'{b["iteration_depth_max"]}× on one file',
-              f'Max edits to a single file in one session; {b["files_hammered_over_15x"]} files >15×. Mean is just {b["iteration_depth_mean"]}.',
-              flag=b["iteration_depth_max"] >= 40),
+              f'Max edits to a single file in one session; {b["files_hammered_over_15x"]} files >15×. Mean is just {b["iteration_depth_mean"]}.'),
         _card("Course-correction", f'{b["tool_errors"]:,} errors, {round(b["error_recovery_ratio"]*100)}% recovered',
               f'{b["error_rate_per_100_tools"]} errors per 100 tool calls — recovered on the fly.'),
         _card("Model of choice", model_a, model_d),
