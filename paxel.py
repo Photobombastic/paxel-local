@@ -997,16 +997,20 @@ def write_narrative_input(s, opening_prompts, longest_prompts):
 # ---------------------------------------------------------------------------
 REPO_URL = "https://github.com/Photobombastic/paxel-local"
 
-# Plain-language, gstack-grounded explanation shown under each score bar.
+# Plain-language explanation shown under each score bar — what the axis measures, in
+# human terms, no jargon. (The gstack grounding lives in the disclaimer + README, not here.)
 SCORE_NOTES = {
-    "Execution": "Shipped output at AI leverage — gold-standard git churn rate, "
-                 "delegation/parallelism, and sustained build sessions (gstack's Build + “Golden Age”).",
-    "Planning": "Think-before-build — exploring & searching before writing, plan/spec "
-                "ceremony, and reasoning depth (gstack's Think+Plan + “Search Before Building”).",
-    "Steering": "Hands-on direction — staying in the loop, interrupting long chains, and "
-                "asking hard questions rather than letting the agent run (gstack's “User Sovereignty”).",
-    "Engineering": "Craft & low rework — clean focused changes, little file-thrash, and "
-                   "review/test/investigate discipline (gstack's “Boil the Lake” + Review/Test/Reflect).",
+    "Execution": "How much you ship, and how fast — committed code, work you hand off to "
+                 "agents, and long focused build sessions.",
+    "Planning": "How much you think before you build — reading and exploring before writing, "
+                "and laying out a plan first.",
+    "Steering": "How hands-on you stay — interrupting, redirecting, and asking questions "
+                "instead of letting the agent run unchecked.",
+    "Engineering": "How clean your work is — focused changes, not re-editing the same file "
+                   "over and over, and checking your work.",
+    "Product Instinct": "Whether you rethink the problem before building it — brainstorming and "
+                        "questioning the ask, not just doing the ticket. ⚠ Our softest read — "
+                        "transcripts barely show this.",
 }
 
 
@@ -1029,7 +1033,7 @@ def _skill_uses_any(stats, needles):
 
 
 def compute_scores(stats):
-    # Four axes, each DERIVED FROM Garry Tan's gstack (see the module note above) —
+    # Five axes, each DERIVED FROM Garry Tan's gstack (see the module note above) —
     # one paxel subagent per axis read the real gstack role/skill definitions and
     # mapped them onto the metrics paxel can honestly measure. Weights sum to 1.0
     # per axis; every term is clamped to 0..1 against a justified, gstack-anchored
@@ -1037,13 +1041,15 @@ def compute_scores(stats):
     # (plan/review/qa/investigate), detected via whatever skills implement it —
     # gstack's own command names plus the wider ecosystem's equivalents.
     #
-    # Paxel's 5th axis "Product Thinking" is dropped on purpose — there's no honest
-    # signal for product instinct in coding transcripts, so faking it would be exactly
-    # the flattering-but-meaningless number this tool exists to avoid.
+    # The 5th axis, "Product Instinct", is DELIBERATELY THE SOFTEST — coding transcripts
+    # barely reveal product judgment, so we proxy it from reframe-before-build skill use +
+    # premise-challenging questions and flag it as soft on the card itself, rather than
+    # either faking a confident number or dropping it. Show the seams, don't fake them.
     v, b, vel = stats["volume"], stats["behavior"], stats["velocity"]
     if v["total_sessions"] == 0 or v["tool_calls_total"] == 0:
         # No real activity → don't manufacture a flattering "Quality Guardian 9.0"
-        return {"Execution": 0.0, "Planning": 0.0, "Steering": 0.0, "Engineering": 0.0}
+        return {"Execution": 0.0, "Planning": 0.0, "Steering": 0.0, "Engineering": 0.0,
+                "Product Instinct": 0.0}
     sess = max(v["total_sessions"], 1)
     prompts = max(v["total_prompts"], 1)
     hours = max(vel["active_hours"], 0.1)
@@ -1106,8 +1112,25 @@ def compute_scores(stats):
         + 0.22 * _clamp((eng_skills / sess) / 3.0)                       # Boil-the-Lake ceremonies: review/qa/investigate/retro
         + 0.10 * (1 - _clamp(b["error_rate_per_100_tools"] / 10)))       # low error rate: root-cause discipline
 
+    # PRODUCT INSTINCT — gstack's CEO / office-hours layer: do you rethink the PRODUCT
+    # before building it (reframe the request, challenge premises, find the 10-star
+    # version) instead of just executing the ticket as written? This is the SOFTEST axis
+    # by design — coding transcripts barely see product judgment — so we proxy it from
+    # the gstack "reframe before build" skills (brainstorm / office-hours / ceo-review /
+    # design / cso / spec), premise-challenging questions, and how broadly you build.
+    # The scorecard flags it as the softest-signal axis so we stay honest about it.
+    reframe = _skill_uses_any(stats, ("brainstorm", "office-hours", "ceo-review", "cso",
+                                      "design-consultation", "design-shotgun", "spec", "grill"))
+    breadth = len(stats["stack"].get("top_projects", []))
+    product = 10 * (
+        0.50 * _clamp((reframe / sess) / 1.5)                            # reframe-before-build ceremony
+        + 0.30 * _clamp((b["questions_asked"] / prompts) / 0.05)        # challenge the premise (ask, don't assume)
+        + 0.10 * _clamp(breadth / 8)                                     # build across many products
+        + 0.10 * _clamp(b["planning_ratio_explore_to_doing"] / 0.65))   # explore the problem space first
+
     return {"Execution": round(execution, 1), "Planning": round(planning, 1),
-            "Steering": round(steering, 1), "Engineering": round(engineering, 1)}
+            "Steering": round(steering, 1), "Engineering": round(engineering, 1),
+            "Product Instinct": round(product, 1)}
 
 
 def pick_archetype(stats, scores):
@@ -1132,6 +1155,158 @@ def pick_archetype(stats, scores):
     else:
         name, q = "The Builder", "Steady, pragmatic, and tool-driven — you just keep shipping."
     return name, q
+
+
+def signature_moves(stats):
+    """Named decision-patterns ('signature moves') drawn from real session behavior,
+    each tagged with the gstack sprint stage it expresses. Only moves whose gate
+    actually fires are returned (we never pad) — top 5 by a comparable 0..1 strength.
+    Cites measured numbers, NEVER raw prompt text, so the profile stays shareable
+    without leaking session content. NOTE for maintainers: evidence HTML is trusted /
+    safe-by-construction — never interpolate user/transcript-derived strings (skill,
+    project, tool names) here without html.escape; today every value is a number or a
+    static template (the lone tool-name use is gated to == "Bash" and emits a literal)."""
+    v, b, vel, t, st = (stats["volume"], stats["behavior"], stats["velocity"],
+                        stats["tools"], stats["stack"])
+    sess = max(v["total_sessions"], 1)
+    prompts = max(v["total_prompts"], 1)
+
+    def sk(*needles):
+        return sum(n for k, n in st.get("top_skills", []) if any(nd in k.lower() for nd in needles))
+
+    top_tool = (str(t["top_tools"][0][0]) if t["top_tools"] else "")
+    deleg = b["delegate_actions"] + b["background_tasks"]
+    pool = []   # (strength 0..1, gstack-tag, title, evidence_html)
+
+    rev = sk("review", "code-review")
+    if rev >= 50 and rev >= sess * 0.5:
+        pool.append((_clamp(rev / (sess * 2)), "Review",
+            "You review more than you write",
+            f'<b>{rev:,}</b> code-review passes — one of your most-used skills. '
+            f'You don\'t trust a diff until a second set of eyes has seen it.'))
+
+    if b["planning_ratio_explore_to_doing"] >= 0.55 and b["iteration_depth_max"] >= 40:
+        pool.append((_clamp(b["iteration_depth_max"] / 100.0), "Think → Build",
+            "Plan wide, then grind narrow",
+            f'A <b>{b["planning_ratio_explore_to_doing"]:.2f}</b> explore-to-build ratio — you read and '
+            f'search far more than you type — yet you\'ll hammer one file <b>{b["iteration_depth_max"]}×</b> '
+            f'rather than re-architect. Blueprint, then bulldozer.'))
+
+    if deleg >= 100 and deleg >= prompts * 0.3:
+        shell = " with the shell as your top tool" if top_tool == "Bash" else ""
+        pool.append((_clamp(deleg / (prompts * 0.8)), "Build",
+            "You run a team, not a tool",
+            f'<b>{deleg:,}</b> delegated &amp; backgrounded agent runs{shell}. '
+            f'You parallelize and grind rather than babysit one chat.'))
+
+    tb = v["thinking_blocks"]
+    if tb / sess >= 8:
+        pool.append((_clamp((tb / sess) / 30.0), "Think",
+            "You think before you touch the diff",
+            f'<b>{tb:,}</b> reasoning blocks (~{tb // sess}/session) before edits land — '
+            f'you deliberate hard, then commit.'))
+
+    plan = sk("brainstorm", "writing-plan", "autoplan", "spec")
+    if plan >= 30 and plan >= sess * 0.35:
+        pool.append((_clamp(plan / float(sess)), "Plan",
+            "You write the plan before the code",
+            f'<b>{plan:,}</b> planning &amp; brainstorming runs — you scaffold the decision '
+            f'before the implementation, gstack-style.'))
+
+    qrate = b["questions_asked"] / prompts
+    if qrate < 0.03 and prompts > 200:
+        pool.append((0.45, "User Sovereignty",
+            "You direct, you don't deliberate",
+            f'You asked the agent a question on just <b>{qrate*100:.0f}%</b> of {prompts:,} prompts — '
+            f'you steer by command, not by committee.'))
+
+    if vel["shell_authored_lines_est"] >= 20000 and top_tool == "Bash":
+        pool.append((_clamp(vel["shell_authored_lines_est"] / 80000.0), "Build",
+            "You live in the shell",
+            f'~<b>{vel["shell_authored_lines_est"]:,}</b> lines authored through Bash heredocs and '
+            f'redirects — real work most profilers never even see.'))
+
+    pool.sort(key=lambda x: -x[0])
+    return [(tag, title, ev) for _, tag, title, ev in pool[:5]]
+
+
+def growth_edges(stats, scores):
+    """Specific next-steps keyed off the user's OWN weakest signals — not generic advice.
+    Each leads with a PRACTICE the reader can adopt today, then names the gstack skill
+    that embodies it (in parens) as an optional, installable upgrade — so the advice is
+    actionable whether or not they run gstack. Only gated edges are returned; top 3,
+    most-urgent first. NOTE for maintainers: advice HTML is trusted/safe-by-construction
+    — never interpolate user/transcript-derived strings (skill, project, tool names)
+    here without html.escape; today every interpolated value is a number or static."""
+    v, b, vel, st = (stats["volume"], stats["behavior"], stats["velocity"], stats["stack"])
+    sess = max(v["total_sessions"], 1)
+    prompts = max(v["total_prompts"], 1)
+
+    def sk(*needles):
+        return sum(n for k, n in st.get("top_skills", []) if any(nd in k.lower() for nd in needles))
+
+    lowest = min(scores, key=scores.get) if scores else ""
+    qrate = b["questions_asked"] / prompts
+    rev = sk("review", "code-review")
+    tdd = sk("test", "tdd", "qa")
+    pool = []   # (priority: lower = more urgent / shows first, eyebrow, title, advice_html)
+
+    # Gate on the Steering SCORE (not question-rate alone) so a high-Steering user who
+    # simply steers via short commands is never told to "steer harder."
+    if scores.get("Steering", 10) < 7:
+        lead = (f'Steering is your lowest axis at <b>{scores.get("Steering")}</b>'
+                if lowest == "Steering" else f'Steering sits at <b>{scores.get("Steering")}</b>')
+        pool.append((1.0, "Steer harder",
+            "Interrupt during, not just review after",
+            f'{lead} — you questioned the agent on only <b>{qrate*100:.0f}%</b> of prompts. '
+            f'Break in on risky steps and redirect long chains <i>while</i> they run, instead of only '
+            f'reviewing after. Experts interrupt more, not less. (gstack names this guardrail <code>/careful</code>.)'))
+
+    if rev >= 50 and tdd < max(rev * 0.1, 5):
+        pool.append((1.5, "Add a reflex",
+            "Pair your review reflex with a test reflex",
+            f'<b>{rev:,}</b> code-reviews vs <b>{tdd}</b> test runs. Make the double-check a <i>regression '
+            f'test</i>: write one for every bug you fix before you move on. Tests are the cheapest thing to '
+            f'add with AI. (gstack\'s <code>/qa</code> does this automatically.)'))
+
+    if b["iteration_depth_max"] >= 40 or b["files_hammered_over_15x"] >= 10:
+        pool.append((2.0, "Stop the grind",
+            "Root-cause instead of whack-a-mole",
+            f'<b>{b["iteration_depth_max"]}×</b> on one file, <b>{b["files_hammered_over_15x"]}</b> files past '
+            f'15 edits. When a file resists past ~15 tries, stop and find the root cause before the next edit '
+            f'instead of re-trying. (gstack names this discipline <code>/investigate</code> — no fixes without investigation.)'))
+
+    if scores.get("Planning", 10) < 6:
+        pool.append((scores.get("Planning", 10), "Plan first",
+            "Spend more time in Think + Plan",
+            f'Planning is <b>{scores.get("Planning")}</b>. Sketch the plan and reframe the ask <i>before</i> '
+            f'writing code — it\'s the cheapest place to catch a wrong turn. '
+            f'(gstack front-loads this with <code>/office-hours</code> + <code>/autoplan</code>.)'))
+
+    eng_skills = sk("review", "qa", "investigate", "retro")
+    if scores.get("Engineering", 10) < 6 and eng_skills < sess * 0.3:
+        pool.append((scores.get("Engineering", 10) + 0.1, "Boil the lake",
+            "Run a quality pass before you ship",
+            f'Engineering is <b>{scores.get("Engineering")}</b>. Add one deliberate review-and-test pass on '
+            f'every branch before you ship — that\'s where craft compounds. '
+            f'(gstack\'s back half: <code>/review</code>, <code>/qa</code>, <code>/investigate</code>, <code>/retro</code>.)'))
+
+    if scores.get("Product Instinct", 10) < 5:
+        pool.append((scores.get("Product Instinct", 10) + 0.2, "Reframe first",
+            "Challenge the ask before you build it",
+            f'Product Instinct is <b>{scores.get("Product Instinct")}</b> (our softest axis). Before building, '
+            f'write down the real problem and 2–3 alternatives — catch the wrong product before you ship the '
+            f'right code for it. (gstack\'s <code>/office-hours</code> runs six forcing questions for exactly this.)'))
+
+    if not pool:
+        pool.append((9.0, "Go deeper",
+            "You're balanced — your edge is depth",
+            'You\'re even across the build sprint, so the next gear isn\'t a weak spot to patch — it\'s depth. '
+            'Add a short retro after each session and let the learnings compound session over session. '
+            '(gstack names this <code>/retro</code> — the Reflect stage.)'))
+
+    pool.sort(key=lambda x: x[0])
+    return [(eb, title, adv) for _, eb, title, adv in pool[:3]]
 
 
 def _pretty_model(m):
@@ -1184,7 +1359,9 @@ _PROFILE_CSS = """<style>
   .btn{display:inline-flex;align-items:center;gap:8px;padding:9px 15px;border-radius:999px;cursor:pointer;font-weight:600;font-size:14px;color:#fff;border:1px solid transparent;font-family:var(--sans)}
   .btn:hover{text-decoration:none;opacity:.9} .btn.x{background:#000} .btn.ghost{background:#fff;color:var(--slate);border-color:var(--line)}
   .btn svg{width:15px;height:15px} .btn.x svg{fill:#fff}
-  h2.section{font-family:var(--display);font-size:14px;text-transform:uppercase;letter-spacing:.18em;color:var(--slate);margin:54px 0 18px;font-weight:700}
+  h2.section{font-family:var(--display);font-size:14px;text-transform:uppercase;letter-spacing:.18em;color:var(--slate);margin:54px 0 14px;font-weight:700}
+  p.lead{color:var(--muted);font-size:14.5px;margin:-4px 0 20px;max-width:700px;line-height:1.55}
+  .card code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:#eef1f3;color:var(--beak-deep);padding:1px 5px;border-radius:4px}
   .disclaimer{background:#fff;border:1px solid var(--line);border-left:4px solid var(--beak);border-radius:6px;padding:14px 16px;margin:-6px 0 24px;font-size:13.5px;color:#48535b;line-height:1.55} .disclaimer b{color:var(--text)}
   .score{display:grid;grid-template-columns:160px 1fr 46px;align-items:center;gap:14px;margin:0 0 14px} .score .name{font-weight:600;font-size:15px}
   .score .track{height:12px;background:#dde2e6;border-radius:999px;overflow:hidden} .score .fill{height:100%;background:linear-gradient(90deg,var(--beak-deep),var(--beak));border-radius:999px}
@@ -1198,6 +1375,9 @@ _PROFILE_CSS = """<style>
 
 
 def _card(q, a, d, flag=False):
+    # q/a/d are injected RAW (no escaping) so callers can use intentional <b>/<code>/<i>
+    # markup. Every caller must pass safe-by-construction strings: numbers, static
+    # templates, or html.escape()'d values — NEVER raw user/transcript-derived text.
     cls = "card flag" if flag else "card"
     return f'<div class="{cls}"><p class="q">{q}</p><p class="a">{a}</p><p class="d">{d}</p></div>'
 
@@ -1253,6 +1433,24 @@ def write_profile_html(stats, archetype, quote, scores):
         + '</div>'
         for name, val in scores.items())
 
+    moves = signature_moves(stats)
+    edges = growth_edges(stats, scores)
+    moves_html = "".join(_card(tag, title, ev) for tag, title, ev in moves)
+    edges_html = "".join(_card(eb, title, adv, flag=True) for eb, title, adv in edges)
+
+    # Data for the canvas-drawn 1200×630 share card (no foreignObject → no canvas taint
+    # → the download actually works in every browser, not just Chromium).
+    card_data = json.dumps({
+        "arch": archetype,
+        "quote": quote,
+        "scores": [[k, val] for k, val in scores.items()],
+        "stats": [[f'{v["total_sessions"]}', "sessions"],
+                  [f'{v["total_prompts"]:,}', "prompts"],
+                  [f'{v["tool_calls_total"]:,}', "tool calls"],
+                  [f'{vel["git_churn_total"]:,}', "git lines"]],
+        "logo": logo,
+    })
+
     caption = ("My “how I build with AI” profile, computed 100% locally — nothing uploaded. "
                "Made with paxel-local, an MIT rebuild of YC's Paxel that keeps your sessions on your machine. "
                "Run your own: " + REPO_URL)
@@ -1298,6 +1496,18 @@ def write_profile_html(stats, archetype, quote, scores):
       'each axis is derived from gstack\'s actual sprint (Think → Plan → Build → Review → Test → Ship → Reflect) and ethos, not an arbitrary scale. '
       'Paxel\'s own algorithm is closed, so this is a reasoned estimate, <b>not a replica</b>. Numbers = fact, scores = opinion.</div>')
     P(score_rows)
+    if moves:
+        P('<h2 class="section">Your signature moves</h2>')
+        P('<p class="lead">The patterns in how you direct the AI — pulled from your real sessions, each '
+          'tagged to the gstack sprint stage it expresses.</p>')
+        P(f'<div class="grid">{moves_html}</div>')
+    if edges:
+        P('<h2 class="section">Your growth edge</h2>')
+        P('<p class="lead">A few specific things to try next — keyed to your <i>own</i> weakest signals, not '
+          'generic advice. Each is a habit you can adopt today; the <code>/commands</code> in parentheses are '
+          'optional skills from <a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">gstack</a> '
+          '(Garry Tan\'s toolkit) — the named, installable version of that habit if you want it.</p>')
+        P(f'<div class="grid">{edges_html}</div>')
     P('<h2 class="section">What we noticed</h2><div class="grid">')
     P("".join(cards))
     P('</div>')
@@ -1315,17 +1525,38 @@ def write_profile_html(stats, archetype, quote, scores):
       'if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(caption).then(d).catch(fb);}else{fb();}'
       'function fb(){var ta=document.createElement("textarea");ta.value=caption;document.body.appendChild(ta);ta.select();'
       'try{document.execCommand("copy");}catch(e){}document.body.removeChild(ta);d();}});')
-    P('var ib=document.getElementById("share-img");if(ib)ib.addEventListener("click",function(){try{'
-      'var node=document.getElementById("report");var css=document.querySelector("style").textContent;'
-      'var w=node.offsetWidth,h=node.offsetHeight;var xml=new XMLSerializer().serializeToString(node.cloneNode(true));'
-      'var svg=\'<svg xmlns="http://www.w3.org/2000/svg" width=\'+\'"\'+w+\'" height="\'+h+\'">\'+'
-      '\'<foreignObject x="0" y="0" width="\'+w+\'" height="\'+h+\'"><div xmlns="http://www.w3.org/1999/xhtml"><style>\'+css+\'</style>\'+xml+\'</div></foreignObject></svg>\';'
-      'var url=URL.createObjectURL(new Blob([svg],{type:"image/svg+xml;charset=utf-8"}));var im=new Image();'
-      'im.onload=function(){var s=2,cv=document.createElement("canvas");cv.width=w*s;cv.height=h*s;var ctx=cv.getContext("2d");'
-      'ctx.scale(s,s);ctx.fillStyle="#eef1f3";ctx.fillRect(0,0,w,h);ctx.drawImage(im,0,0);URL.revokeObjectURL(url);'
-      'cv.toBlob(function(bl){try{var a=document.createElement("a");a.href=URL.createObjectURL(bl);a.download="builder-profile.png";a.click();}catch(e){alert("Image export needs a Chromium browser (Chrome/Edge/Arc) — otherwise screenshot.");}});};'
-      'im.onerror=function(){alert("Image export needs a Chromium browser (Chrome/Edge/Arc) — otherwise screenshot.");};im.src=url;'
-      '}catch(e){alert("Image export failed — try Chrome, or screenshot.");}});')
+    P('var CARD=' + card_data + ';')
+    P(r'''var ib=document.getElementById("share-img");
+if(ib)ib.addEventListener("click",function(){
+  try{
+    var W=1200,H=630,s=2,slate="#313941",beak="#ED7379",beakD="#D14E57",text="#16191d",mut="#5e6a73",line="#d9dee2",track="#dde2e6";
+    var cv=document.createElement("canvas");cv.width=W*s;cv.height=H*s;
+    var c=cv.getContext("2d");c.scale(s,s);c.textBaseline="alphabetic";
+    c.fillStyle="#ffffff";c.fillRect(0,0,W,H);c.fillStyle=beak;c.fillRect(0,0,W,6);
+    function wrap(t,x,y,mw,lh,max){var ws=t.split(" "),ln="",n=0;for(var i=0;i<ws.length;i++){var tn=ln?ln+" "+ws[i]:ws[i];if(c.measureText(tn).width>mw&&ln){c.fillText(ln,x,y);y+=lh;ln=ws[i];n++;if(max&&n>=max){c.fillText(ln+"…",x,y);return y;}}else{ln=tn;}}c.fillText(ln,x,y);return y;}
+    function draw(){
+      var bx0=CARD.logo?130:56;
+      c.fillStyle=slate;c.font="700 26px -apple-system,'Segoe UI',Roboto,sans-serif";c.fillText("Roadmap",bx0,64);
+      var bw=c.measureText("Roadmap").width;c.fillStyle=mut;c.font="500 17px -apple-system,sans-serif";c.fillText("· Builder Profile",bx0+bw+10,64);
+      c.textAlign="right";c.fillStyle=mut;c.font="600 13px -apple-system,sans-serif";c.fillText("Generated locally · nothing uploaded",W-56,58);c.textAlign="left";
+      c.strokeStyle=line;c.lineWidth=1;c.beginPath();c.moveTo(56,92);c.lineTo(W-56,92);c.stroke();
+      c.fillStyle=mut;c.font="700 13px -apple-system,sans-serif";c.fillText("YOUR BUILDER PROFILE",56,136);
+      var fs=58;c.font="800 "+fs+"px Georgia,'Times New Roman',serif";while(c.measureText(CARD.arch+".").width>W-112&&fs>30){fs-=2;c.font="800 "+fs+"px Georgia,serif";}
+      c.fillStyle=beak;c.fillText(CARD.arch+".",56,150+fs);
+      c.fillStyle="#3b444b";c.font="italic 21px Georgia,serif";var qy=wrap("“"+CARD.quote+"”",56,150+fs+42,W-130,30,2);
+      var sy=qy+44;c.fillStyle=mut;c.font="700 13px -apple-system,sans-serif";c.fillText("GSTACK SCORECARD",56,sy);
+      var rows=CARD.scores.length,base=sy+16,rh=Math.min(34,(H-70-base)/rows);
+      for(var i=0;i<rows;i++){var ry=base+18+i*rh,nm=CARD.scores[i][0],vl=CARD.scores[i][1];
+        c.fillStyle=slate;c.font="600 15px -apple-system,sans-serif";c.fillText(nm,56,ry+4);
+        var bx=270,bw2=600,bh=12,by=ry-7;c.fillStyle=track;c.fillRect(bx,by,bw2,bh);
+        var g=c.createLinearGradient(bx,0,bx+bw2,0);g.addColorStop(0,beakD);g.addColorStop(1,beak);c.fillStyle=g;c.fillRect(bx,by,bw2*(vl/10),bh);
+        c.fillStyle=text;c.font="800 15px ui-monospace,Menlo,monospace";c.textAlign="right";c.fillText(vl.toFixed(1),W-56,ry+4);c.textAlign="left";}
+      c.fillStyle=mut;c.font="500 13px -apple-system,sans-serif";c.fillText("Generated 100% on-device · github.com/Photobombastic/paxel-local",56,H-24);
+      cv.toBlob(function(bl){if(!bl){alert("Image export failed — try a screenshot.");return;}var a=document.createElement("a");a.href=URL.createObjectURL(bl);a.download="builder-profile.png";a.click();});
+    }
+    if(CARD.logo){var im=new Image();im.onload=function(){c.drawImage(im,56,32,46,46);draw();};im.onerror=draw;im.src=CARD.logo;}else{draw();}
+  }catch(e){alert("Image export failed — try a screenshot.");}
+});''')
     P("})();</script></body></html>")
     with open(os.path.join(OUT_DIR, "profile.html"), "w") as f:
         f.write("\n".join(parts))

@@ -27,21 +27,27 @@ same *experience*, not byte-for-byte parity.
 
 ## What you get
 
-One command emits a complete, **branded, shareable `profile.html`** — open it in a browser
-and you get an archetype, a 0–10 scorecard, a "what we noticed" card grid, and Share buttons
-(Post on X / Copy caption / Download image). No manual step, no LLM call required.
+One command emits a complete, **branded, shareable `profile.html`** — open it in a browser and you get:
 
-The archetype and scores come from a **transparent rubric** (`compute_scores` / `pick_archetype`
-in `paxel.py`) over the measured metrics — Paxel's real algorithm is closed, so this is a
-reasoned estimate, not a replica. The counts are measured and reproducible; the scores are an
-opinion, and the report says so.
+1. **An archetype** — the builder you are (Architect, Brute-Force Architect, Velocity Machine, Quality Guardian, Night Owl, …), named from your sessions.
+2. **A 0–10 scorecard** across **five dimensions** (Execution, Planning, Steering, Engineering, Product Instinct), each grounded in gstack (below).
+3. **Your signature moves** — the decision-patterns in how you direct the AI ("you review more than you write", "plan wide, then grind narrow"), drawn from real session behavior and tagged to the gstack stage each expresses.
+4. **Your growth edge** — a few specific things to try next, keyed to your *own* weakest signals and the gstack skill that addresses each — not generic advice.
+5. **A "what we noticed" card grid** + Share buttons (Post on X / Copy caption / Download a 1200×630 image card that works in every browser).
+
+No manual step, no LLM call required. The archetype, scores, signature moves, and growth edges all
+come from **transparent local rule engines** (`compute_scores` / `pick_archetype` / `signature_moves`
+/ `growth_edges` in `paxel.py`) over the measured metrics — Paxel's real algorithm is closed, so this
+is a reasoned estimate, not a replica. The counts are measured and reproducible; the verdicts are an
+opinion, and the report says so. Nothing quotes your raw prompt text, so the profile stays shareable
+without leaking session content.
 
 Want a richer, prose narrative? `narrative_input.md` is also written — paste it into your own
 Claude/GPT and it'll write you a deeper profile locally. That's optional; the HTML stands alone.
 
 ## How scores are graded — grounded in gstack, not an arbitrary scale
 
-The four axes aren't a rubric we invented in a vacuum. Each one is **derived from
+The five axes aren't a rubric we invented in a vacuum. Each one is **derived from
 [Garry Tan's gstack](https://github.com/garrytan/gstack)** — his open-source framework that turns
 Claude Code into a virtual engineering team. gstack and YC's Paxel both come out of Garry-Tan-world,
 so grounding the scores in gstack's *actual* definitions of good building is plausibly closer to
@@ -60,16 +66,23 @@ honestly measure from transcripts:
 | **Planning** | Think-before-build — exploring & searching before writing, plan/spec ceremony, reasoning depth | gstack's **Think + Plan** phases + "Search Before Building" |
 | **Steering** | Hands-on direction — staying in the loop, interrupting long chains, asking hard questions | "**User Sovereignty**" + the **Review** gate (experts stay hands-on) |
 | **Engineering** | Craft & low rework — clean focused changes, little file-thrash, review/test/investigate discipline | "**Boil the Lake**" + the **Review / Test / Reflect** stages |
+| **Product Instinct** | Reframe-before-build — rethinking the product (brainstorm, challenge premises, build broadly) before executing the ticket. ⚠ *Softest-signal axis* — transcripts barely see product judgment, and the card says so | gstack's **CEO / office-hours** layer (find the 10-star product) |
+
+**Signature moves** (`signature_moves`) and the **growth edge** (`growth_edges`) are the same idea applied
+to prose: named decision-patterns and next-steps, each gated on a real threshold (we never pad), tied to
+a gstack stage, and keyed to *your* numbers. The growth edge points at the gstack skill that closes your
+weakest gap — e.g. low Steering → `/careful`; review ≫ test → `/qa`; file-hammering → `/investigate`.
 
 How the criteria were built: one subagent per axis read the real gstack role/skill definitions
 (`office-hours`, `autoplan`, `plan-ceo-review`, `review`, `qa`, `investigate`, `ship`, `retro`, …)
 and the ethos, derived that axis's notion of "good," then mapped it onto paxel's available metrics.
 Every term is transparent, clamped 0–1 against a justified target, and weighted to sum to 1.0 — read
-`compute_scores` in `paxel.py`; nothing is hidden. Honest limits: paxel can't see test *coverage*
-from transcripts, so "completeness" is proxied by quality-ceremony skill use + low rework; and the
-"5th axis" Paxel shows (product thinking) is **dropped on purpose** — there's no honest signal for
-it in coding transcripts, so faking it would be exactly the flattering-but-meaningless number this
-tool exists to avoid.
+`compute_scores` in `paxel.py`; nothing is hidden. Honest limits: paxel can't see test *coverage* from
+transcripts, so "completeness" is proxied by quality-ceremony skill use + low rework. And **Product
+Instinct is deliberately the softest axis** — coding transcripts barely reveal product judgment, so we
+proxy it from reframe-before-build skill use + premise-challenging questions and *flag it as soft on the
+card itself* rather than pretend it's as solid as the other four. We'd rather show the seams than fake a
+confident number.
 
 ## Sources
 
