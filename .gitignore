@@ -1,0 +1,15 @@
+# Local outputs — contain YOUR data (names, PII, project info). NEVER commit these.
+stats.json
+report.md
+PROFILE.md
+profile.html
+narrative_input.md
+AUDIT.md
+
+# Local-only agent context (never publish)
+CLAUDE.md
+HANDOFF.md
+
+# Python
+__pycache__/
+*.pyc
