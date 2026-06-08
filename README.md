@@ -39,6 +39,38 @@ opinion, and the report says so.
 Want a richer, prose narrative? `narrative_input.md` is also written — paste it into your own
 Claude/GPT and it'll write you a deeper profile locally. That's optional; the HTML stands alone.
 
+## How scores are graded — grounded in gstack, not an arbitrary scale
+
+The four axes aren't a rubric we invented in a vacuum. Each one is **derived from
+[Garry Tan's gstack](https://github.com/garrytan/gstack)** — his open-source framework that turns
+Claude Code into a virtual engineering team. gstack and YC's Paxel both come out of Garry-Tan-world,
+so grounding the scores in gstack's *actual* definitions of good building is plausibly closer to
+what Paxel itself grades against — and it's a more honest story than a number we made up.
+
+gstack frames building as a sprint — **Think → Plan → Build → Review → Test → Ship → Reflect** — on
+top of three ethos pillars: **Boil the Lake** (completeness is cheap with AI, so do the complete
+thing), **Search Before Building** (know what exists before you build it), and **User Sovereignty**
+(AI recommends, the human decides — and per Anthropic's own research that gstack cites, *experts
+interrupt more, not less*). Each axis maps a slice of that framework onto the metrics paxel can
+honestly measure from transcripts:
+
+| Axis | What it measures | Grounded in |
+|---|---|---|
+| **Execution** | Shipped output at AI leverage — gold-standard git churn rate (modestly coverage-corrected, ≤1.4×, and disclosed in `report.md`), delegation/parallelism, sustained build sessions | gstack's **Build** phase + the "Golden Age" ethos (one builder shipping like a team) |
+| **Planning** | Think-before-build — exploring & searching before writing, plan/spec ceremony, reasoning depth | gstack's **Think + Plan** phases + "Search Before Building" |
+| **Steering** | Hands-on direction — staying in the loop, interrupting long chains, asking hard questions | "**User Sovereignty**" + the **Review** gate (experts stay hands-on) |
+| **Engineering** | Craft & low rework — clean focused changes, little file-thrash, review/test/investigate discipline | "**Boil the Lake**" + the **Review / Test / Reflect** stages |
+
+How the criteria were built: one subagent per axis read the real gstack role/skill definitions
+(`office-hours`, `autoplan`, `plan-ceo-review`, `review`, `qa`, `investigate`, `ship`, `retro`, …)
+and the ethos, derived that axis's notion of "good," then mapped it onto paxel's available metrics.
+Every term is transparent, clamped 0–1 against a justified target, and weighted to sum to 1.0 — read
+`compute_scores` in `paxel.py`; nothing is hidden. Honest limits: paxel can't see test *coverage*
+from transcripts, so "completeness" is proxied by quality-ceremony skill use + low rework; and the
+"5th axis" Paxel shows (product thinking) is **dropped on purpose** — there's no honest signal for
+it in coding transcripts, so faking it would be exactly the flattering-but-meaningless number this
+tool exists to avoid.
+
 ## Sources
 
 Auto-detected and parsed (all reads local):
@@ -115,8 +147,9 @@ brute-forcing.
 - **Subagent work counts** toward tool/churn totals (it's work you delegated) but never toward
   your prompt count.
 - Timestamps are converted UTC → local timezone for the work-hour histogram.
-- The **archetype and 0–10 axis scores are interpretive** (Paxel's rubric is closed). The
-  *counts* are measured and reproducible; the scores are an opinion laid on top.
+- The **archetype and 0–10 axis scores are interpretive** (Paxel's rubric is closed). The axes are
+  derived from [Garry Tan's gstack](https://github.com/garrytan/gstack) (see "How scores are graded"
+  above), but the *counts* are measured and reproducible; the scores are an opinion laid on top.
 
 ## Known limitations — PRs welcome 🐦
 
@@ -130,7 +163,9 @@ Honest about what it can't see. If you can close one of these, open a PR:
   parsed — reverse-engineering either into the common event shape is a great first PR.
 - **Codex tool churn** from `apply_patch` counts raw patch lines (diff markers included), so it
   over-estimates; the gold-standard git churn is unaffected.
-- **Archetype scoring** is a hand-rolled rubric — a better, evidence-grounded scorer would be a
-  great contribution.
+- **Score grounding** — axis *criteria* are derived from gstack, but the **archetype** picker
+  (`pick_archetype`) is still a hand-rolled rule set, and the gstack→metric mappings are a first
+  pass. Sharper targets, or mapping archetypes onto gstack's roles (CEO / Eng Manager / QA Lead / …),
+  would be great contributions.
 
 Issues and pull requests welcome.

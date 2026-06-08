@@ -908,7 +908,9 @@ def write_report(s):
     if _missing > 0:
         _cov = (f" — note this is **partial**: only {vel['git_repos_with_commits']} of "
                 f"{vel['git_repos_seen']} repos were counted (the rest are missing from disk, have no "
-                f"commits under your git email, or were too large to scan in time)")
+                f"commits under your git email, or were too large to scan in time). "
+                f"The Execution score nudges its throughput term up modestly (≤1.4×) to avoid "
+                f"penalizing you for repos paxel couldn't read")
     else:
         _cov = ""
     A(f"- Tool-only churn (Edit/Write — what most profilers see): {vel['tool_churn_edit_write']:,} lines. "
@@ -982,8 +984,30 @@ def write_narrative_input(s, opening_prompts, longest_prompts):
 # archetype + 0-10 scores (no LLM needed), then we emit a branded, shareable
 # profile.html. The COUNTS are measured; the scores/archetype are a rubric and
 # the report says so. narrative_input.md is still written for optional LLM polish.
+#
+# The four score axes are NOT an arbitrary rubric — each one is grounded in
+# Garry Tan's open-source gstack (github.com/garrytan/gstack), the same
+# Garry-Tan-world framework YC's Paxel comes out of. gstack frames building as a
+# sprint — Think → Plan → Build → Review → Test → Ship → Reflect — on top of
+# three ethos pillars: "Boil the Lake" (completeness is cheap, do the complete
+# thing), "Search Before Building" (know what exists first), and "User
+# Sovereignty" (AI recommends, the human decides — and per Anthropic's own
+# research, experts interrupt MORE, not less). Each axis below maps a slice of
+# that framework onto the metrics paxel can honestly measure from transcripts.
 # ---------------------------------------------------------------------------
 REPO_URL = "https://github.com/Photobombastic/paxel-local"
+
+# Plain-language, gstack-grounded explanation shown under each score bar.
+SCORE_NOTES = {
+    "Execution": "Shipped output at AI leverage — gold-standard git churn rate, "
+                 "delegation/parallelism, and sustained build sessions (gstack's Build + “Golden Age”).",
+    "Planning": "Think-before-build — exploring & searching before writing, plan/spec "
+                "ceremony, and reasoning depth (gstack's Think+Plan + “Search Before Building”).",
+    "Steering": "Hands-on direction — staying in the loop, interrupting long chains, and "
+                "asking hard questions rather than letting the agent run (gstack's “User Sovereignty”).",
+    "Engineering": "Craft & low rework — clean focused changes, little file-thrash, and "
+                   "review/test/investigate discipline (gstack's “Boil the Lake” + Review/Test/Reflect).",
+}
 
 
 def _clamp(x):
@@ -1005,8 +1029,14 @@ def _skill_uses_any(stats, needles):
 
 
 def compute_scores(stats):
-    # Four axes, each rubric designed independently against the available metrics
-    # (weights sum to 1.0 per axis, every term clamped to 0..1 with a justified target).
+    # Four axes, each DERIVED FROM Garry Tan's gstack (see the module note above) —
+    # one paxel subagent per axis read the real gstack role/skill definitions and
+    # mapped them onto the metrics paxel can honestly measure. Weights sum to 1.0
+    # per axis; every term is clamped to 0..1 against a justified, gstack-anchored
+    # target. The skill-ceremony terms match the BEHAVIOR gstack prescribes
+    # (plan/review/qa/investigate), detected via whatever skills implement it —
+    # gstack's own command names plus the wider ecosystem's equivalents.
+    #
     # Paxel's 5th axis "Product Thinking" is dropped on purpose — there's no honest
     # signal for product instinct in coding transcripts, so faking it would be exactly
     # the flattering-but-meaningless number this tool exists to avoid.
@@ -1018,39 +1048,63 @@ def compute_scores(stats):
     prompts = max(v["total_prompts"], 1)
     hours = max(vel["active_hours"], 0.1)
 
-    # EXECUTION — throughput / leverage: how much the agent(s) do per human input.
+    # EXECUTION — gstack's BUILD phase + the "Golden Age" ethos: shipped output at
+    # AI leverage. The throughput signal is gold-standard git churn (what actually
+    # shipped, not tool-churn which inflates via iteration — Garry himself disclaims
+    # raw LOC). But git often sees only some of a corpus's repos (non-git dirs,
+    # cwd→repo gaps), so we nudge the rate up by git coverage rather than penalize a
+    # builder for repos paxel couldn't read. The boost is deliberately MODEST — floored
+    # at 0.7, i.e. at most ~1.4× — because the unseen repos may not have shipped at the
+    # same rate; we nudge, we don't extrapolate, and the report DISCLOSES when this
+    # correction fired (honesty > flattery). Normalized per active hour so a long corpus
+    # can't game it; clamped so a brute-forcer can't run it to 10.
+    git_cov = max(vel["git_repos_with_commits"] / max(vel["git_repos_seen"], 1), 0.7)
+    eff_git_ln_per_hr = (vel["git_churn_total"] / hours) / git_cov
     execution = 10 * (
-        0.30 * _clamp(b["actions_per_prompt"] / 10)
-        + 0.25 * _clamp((b["delegate_actions"] + b["background_tasks"]) / prompts)
-        + 0.20 * _clamp((v["tool_calls_total"] / hours) / 200)
-        + 0.15 * _clamp(b["avg_session_minutes"] / 60)
-        + 0.10 * _clamp(b["scheduled_actions"] / 300))
+        0.35 * _clamp(eff_git_ln_per_hr / 400)                            # shipped git output rate, coverage-corrected
+        + 0.30 * _clamp((b["delegate_actions"] + b["background_tasks"]) / max(prompts * 0.3, 1))  # delegation/parallelism
+        + 0.20 * _clamp(b["actions_per_prompt"] / 12)                     # leverage: work per human prompt
+        + 0.15 * _clamp(b["avg_session_minutes"] / 75))                   # sustained build sessions
 
-    # PLANNING — think-before-doing. Skills are a low-weight bonus (zero-skill safe).
-    plan_skills = _skill_uses_any(stats, ("brainstorm", "writing-plan", "grill", "systematic-debug"))
+    # PLANNING — gstack's THINK+PLAN phases + "Search Before Building": explore and
+    # search before writing, run plan/spec ceremony, reason deeply before deciding.
+    plan_skills = _skill_uses_any(stats, ("brainstorm", "writing-plan", "plan", "spec",
+                                          "office-hours", "autoplan", "grill", "ceo-review",
+                                          "eng-review", "design-review"))
     planning = 10 * (
-        0.35 * _clamp(b["planning_ratio_explore_to_doing"] / 0.60)
-        + 0.25 * _clamp((v["thinking_blocks"] / sess) / 15)
-        + 0.20 * _clamp(v["avg_prompt_length_chars"] / 600)
-        + 0.15 * _clamp((b["explore_actions"] / prompts) / 2.5)
-        + 0.05 * _clamp(plan_skills / 150))
+        0.35 * _clamp(b["planning_ratio_explore_to_doing"] / 0.65)        # explore-to-doing: think before build
+        + 0.25 * _clamp(plan_skills / 8.0)                                # plan/spec ceremony (gstack's defining layer)
+        + 0.20 * _clamp((v["thinking_blocks"] / sess) / 12.0)            # reasoning depth per session
+        + 0.15 * _clamp((b["explore_actions"] / max(b["produce_actions"] + b["execute_actions"], 1)) / 1.5)  # search before building
+        + 0.05 * _clamp(v["avg_prompt_length_chars"] / 500.0))           # forcing-question depth (substantive prompts)
 
-    # STEERING — direct & course-correct. Deliberately avoids error_recovery_ratio
-    # (it saturates ~1.0 for everyone); uses hands-on cadence + chain restraint instead.
+    # STEERING — gstack's "User Sovereignty": AI recommends, the human decides.
+    # Per the Anthropic finding gstack cites, experts interrupt MORE, not less.
+    # Anchored to RATIOS (per-prompt) so verbosity ≠ steering. Avoids
+    # error_recovery_ratio (saturates ~1.0 for everyone → no signal).
+    steer_skills = _skill_uses_any(stats, ("review", "careful", "investigate",
+                                           "office-hours", "code-review"))
     steering = 10 * (
-        0.40 * _clamp((15 - b["actions_per_prompt"]) / 11)        # lower actions/prompt = more hands-on
-        + 0.35 * _clamp((12 - b["iteration_depth_p90"]) / 10)     # lower p90 = breaks in sooner
-        + 0.25 * _clamp((b["questions_asked"] / prompts) / 0.04))
+        0.38 * _clamp((15 - b["actions_per_prompt"]) / 11)               # hands-on cadence: fewer actions/prompt = more in the loop
+        + 0.32 * _clamp((10 - b["iteration_depth_p90"]) / 8)             # break-in: lower p90 = redirects sooner
+        + 0.22 * _clamp((b["questions_asked"] / prompts) / 0.05)         # interrogation rate (per prompt, not raw count)
+        + 0.08 * _clamp(steer_skills / max(sess * 0.5, 1)))             # staying in the verification loop
 
-    # ENGINEERING — craft discipline / low rework. Skills are a low-weight bonus.
+    # ENGINEERING — gstack's "Boil the Lake" + Review/Test/Reflect: clean low-rework
+    # changes plus evidence of the quality ceremonies. NOTE: paxel can't see test
+    # COVERAGE from transcripts, so completeness is proxied by (a) ceremony-skill use
+    # and (b) low rework (changes that didn't need hammering). Ceremony weight trimmed
+    # to 0.22 (from the axis author's 0.30) so the axis isn't dominated by named-skill
+    # detection for users who don't run skills.
     churn_back = vel["git_deletions"] / max(vel["git_insertions"], 1)
-    eng_skills = _skill_uses_any(stats, ("review", "test-driven", "tdd", "systematic-debug", "karpathy"))
+    eng_skills = _skill_uses_any(stats, ("review", "test", "tdd", "qa", "investigate",
+                                         "retro", "learn", "cso", "karpathy", "debug"))
     engineering = 10 * (
-        0.25 * (1 - _clamp((churn_back - 0.20) / 0.40))           # some deletion healthy; lots = rework
-        + 0.30 * (1 - _clamp((b["iteration_depth_p90"] - 3) / 9))  # low typical iteration = clean
-        + 0.30 * (1 - _clamp((b["files_hammered_over_15x"] / sess) / 0.25))  # few hammered files = focused
-        + 0.05 * (1 - _clamp(b["error_rate_per_100_tools"] / 10))
-        + 0.10 * _clamp((eng_skills / sess) / 5))
+        0.28 * (1 - _clamp((churn_back - 0.20) / 0.40))                  # low rework: some deletion healthy, lots = thrash
+        + 0.22 * (1 - _clamp((b["iteration_depth_p90"] - 3) / 9))        # clean iteration: low typical depth = lands right
+        + 0.18 * (1 - _clamp((b["files_hammered_over_15x"] / sess) / 0.25))  # focused: few hammered files
+        + 0.22 * _clamp((eng_skills / sess) / 3.0)                       # Boil-the-Lake ceremonies: review/qa/investigate/retro
+        + 0.10 * (1 - _clamp(b["error_rate_per_100_tools"] / 10)))       # low error rate: root-cause discipline
 
     return {"Execution": round(execution, 1), "Planning": round(planning, 1),
             "Steering": round(steering, 1), "Engineering": round(engineering, 1)}
@@ -1194,7 +1248,9 @@ def write_profile_html(stats, archetype, quote, scores):
     score_rows = "".join(
         f'<div class="score"><span class="name">{name}</span>'
         f'<span class="track"><span class="fill" style="width:{val*10:.0f}%"></span></span>'
-        f'<span class="val mono">{val}</span></div>'
+        f'<span class="val mono">{val}</span>'
+        + (f'<span class="note">{_h.escape(SCORE_NOTES[name])}</span>' if name in SCORE_NOTES else "")
+        + '</div>'
         for name, val in scores.items())
 
     caption = ("My “how I build with AI” profile, computed 100% locally — nothing uploaded. "
@@ -1238,8 +1294,9 @@ def write_profile_html(stats, archetype, quote, scores):
       '<button id="share-img" class="btn ghost" type="button">🖼 Download image</button></div>')
     P('</section><h2 class="section">Your scorecard</h2>')
     P('<div class="disclaimer"><b>How to read this.</b> The counts are <b>measured from your real transcripts and reproducible</b>. '
-      'The 0–10 scores and the archetype are a <b>transparent rubric</b> on top of those numbers — Paxel\'s real algorithm is '
-      'closed, so this is a reasoned estimate, <b>not a replica</b>. Numbers = fact, scores = opinion.</div>')
+      'The 0–10 scores are a <b>transparent rubric grounded in <a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">Garry Tan\'s gstack</a></b> — '
+      'each axis is derived from gstack\'s actual sprint (Think → Plan → Build → Review → Test → Ship → Reflect) and ethos, not an arbitrary scale. '
+      'Paxel\'s own algorithm is closed, so this is a reasoned estimate, <b>not a replica</b>. Numbers = fact, scores = opinion.</div>')
     P(score_rows)
     P('<h2 class="section">What we noticed</h2><div class="grid">')
     P("".join(cards))
