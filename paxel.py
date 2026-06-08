@@ -404,6 +404,34 @@ def _gemini_events(fp):
 _POLITE_RE = re.compile(r'\b(thanks|thank you|thank u|thx|please|pls|appreciate|'
                         r'much appreciated|good (?:job|work)|nice work|well done)\b', re.I)
 
+# --- "In your own words" cards: pulled VERBATIM from your real prompts. These quote raw
+# session text, so they render ONLY on the local page and are deliberately kept OUT of the
+# shareable download card (see card_data). HTML-escape every quote before injecting it. ---
+_TYPO_WORDS = {"teh", "hte", "wrok", "adn", "nad", "recieve", "seperate", "definately",
+               "thier", "alot", "wtih", "taht", "jsut", "becuase", "plz", "pls", "u", "ur",
+               "dont", "wont", "cant", "youre", "wodn", "fo", "ot", "si", "doesnt", "couldnt"}
+
+
+def _typo_score(text):
+    """Rough 'how garbled is this' score — counts likely-typo tokens. Heuristic, not a
+    spell-checker; used only to surface a genuinely odd REAL prompt, never to invent one."""
+    s = 0
+    for t in re.findall(r"[a-z0-9']+", text.lower()):
+        if t in _TYPO_WORDS:
+            s += 1
+        elif len(t) >= 4 and not re.search(r'[aeiou]', t):   # a vowel-less chunk
+            s += 1
+        elif re.search(r'(.)\1\1', t):                        # 3+ of the same letter
+            s += 1
+        elif re.search(r'[a-z]\d|\d[a-z]', t):                # digits glued into a word
+            s += 1
+    return s
+
+
+def _caps_ratio(text):
+    letters = [c for c in text if c.isalpha()]
+    return (sum(1 for c in letters if c.isupper()) / len(letters)) if letters else 0.0
+
 
 def _open_in_browser(path):
     """Best-effort: pop the finished profile in the default browser. Silent if it can't
@@ -1046,8 +1074,8 @@ SCORE_NOTES = {
                  "agents, and long focused build sessions.",
     "Planning": "How much you think before you build — reading and exploring before writing, "
                 "and laying out a plan first.",
-    "Steering": "How hands-on you stay — interrupting, redirecting, and asking questions "
-                "instead of letting the agent run unchecked.",
+    "Steering": "How hands-on you stay — short agent chains and frequent check-ins, "
+                "rather than pointing the agent and letting it run unchecked.",
     "Engineering": "How clean your work is — focused changes, not re-editing the same file "
                    "over and over, and checking your work.",
     "Product Instinct": "Whether you rethink the problem before building it — brainstorming and "
@@ -1078,8 +1106,10 @@ def _evidence(stats):
     """How much activity we actually have to judge habits on, 0..1. ~1.0 for any real
     corpus, near 0 for a thin one. Used to stop 'absence of a signal' from reading as
     'did it perfectly' in the inverse score terms — a barely-used corpus shouldn't grade
-    as a flawless builder. (See _ev and the LOW_DATA flag in write_profile_html.)"""
-    return _clamp(stats["volume"]["tool_calls_total"] / 200)
+    as a flawless builder. (See _ev and the LOW_DATA flag in write_profile_html.)
+    Saturates at ~2000 tool calls (≈15 real sessions) so the gating actually has a
+    gradient across thin→mid corpora, not just sub-30-minute ones."""
+    return _clamp(stats["volume"]["tool_calls_total"] / 2000)
 
 
 def _ev(credit, ev):
@@ -1140,7 +1170,7 @@ def compute_scores(stats):
                                           "eng-review", "design-review"))
     planning = 10 * (
         0.35 * _clamp(b["planning_ratio_explore_to_doing"] / 0.65)        # explore-to-doing: think before build
-        + 0.25 * _clamp(plan_skills / 8.0)                                # plan/spec ceremony (gstack's defining layer)
+        + 0.25 * _clamp((plan_skills / sess) / 0.8)                       # plan/spec ceremony, session-normalized like the other skill terms
         + 0.20 * _clamp((v["thinking_blocks"] / sess) / 12.0)            # reasoning depth per session
         + 0.15 * _clamp((b["explore_actions"] / max(b["produce_actions"] + b["execute_actions"], 1)) / 1.5)  # search before building
         + 0.05 * _clamp(v["avg_prompt_length_chars"] / 500.0))           # forcing-question depth (substantive prompts)
@@ -1204,9 +1234,14 @@ def compute_scores(stats):
 def pick_archetype(stats, scores):
     b, vel, r = stats["behavior"], stats["velocity"], stats["rhythm"]
     peak = (r["peak_hours_local"] or [12])[0]
-    brute = b["iteration_depth_max"] >= 40 or (vel["shell_authored_lines_est"] > 50000
+    # brute = a HABITUAL grinder (high typical iteration), not one 40-edit outlier session
+    brute = b["iteration_depth_p90"] >= 12 or (vel["shell_authored_lines_est"] > 50000
                                                and b["error_rate_per_100_tools"] >= 3)
-    plan_hi, exec_hi, eng_hi = scores["Planning"] >= 7.5, scores["Execution"] >= 8, scores["Engineering"] >= 7.5
+    plan_hi = scores.get("Planning", 0) >= 7.5
+    exec_hi = scores.get("Execution", 0) >= 8
+    eng_hi = scores.get("Engineering", 0) >= 7.5
+    # when both Execution and Engineering qualify, let the dominant one win the label
+    exec_hi = exec_hi and scores.get("Execution", 0) >= scores.get("Engineering", 0)
     night = peak >= 22 or peak <= 4
     if plan_hi and brute:
         name, q = "Brute-Force Architect", "You plan and scaffold like an architect — then grind the hard parts by hand, in the shell, until they work."
@@ -1285,8 +1320,8 @@ def signature_moves(stats):
     if qrate < 0.03 and prompts > 200:
         pool.append((0.45, "User Sovereignty",
             "You direct, you don't deliberate",
-            f'You asked the agent a question on just <b>{qrate*100:.0f}%</b> of {prompts:,} prompts — '
-            f'you steer by command, not by committee.'))
+            f'The agent stopped to ask you on just <b>{qrate*100:.0f}%</b> of {prompts:,} prompts — '
+            f'you point it and let it run, rather than getting pulled into a back-and-forth.'))
 
     if vel["shell_authored_lines_est"] >= 20000 and top_tool == "Bash":
         pool.append((_clamp(vel["shell_authored_lines_est"] / 80000.0), "Build",
@@ -1322,11 +1357,12 @@ def growth_edges(stats, scores):
     # Gate on the Steering SCORE (not question-rate alone) so a high-Steering user who
     # simply steers via short commands is never told to "steer harder."
     if scores.get("Steering", 10) < 7:
-        lead = (f'Steering is your lowest axis at <b>{scores.get("Steering")}</b>'
-                if lowest == "Steering" else f'Steering sits at <b>{scores.get("Steering")}</b>')
+        lead = (f'Steering is your lowest axis at <b>{scores.get("Steering", "?")}</b>'
+                if lowest == "Steering" else f'Steering sits at <b>{scores.get("Steering", "?")}</b>')
         pool.append((1.0, "Steer harder",
             "Interrupt during, not just review after",
-            f'{lead} — you questioned the agent on only <b>{qrate*100:.0f}%</b> of prompts. '
+            f'{lead} — the agent stopped to check with you on only <b>{qrate*100:.0f}%</b> of prompts, '
+            f'so it mostly ran without your input. '
             f'Break in on risky steps and redirect long chains <i>while</i> they run, instead of only '
             f'reviewing after. (gstack calls this <code>/careful</code>.)'))
 
