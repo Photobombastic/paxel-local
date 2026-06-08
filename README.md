@@ -29,8 +29,8 @@ same *experience*, not byte-for-byte parity.
 
 One command emits a complete, **branded, shareable `profile.html`** — open it in a browser and you get:
 
-1. **An archetype** — the builder you are (Architect, Brute-Force Architect, Velocity Machine, Quality Guardian, Night Owl, …), named from your sessions.
-2. **A 0–10 scorecard** across **five dimensions** (Execution, Planning, Steering, Engineering, Product Instinct), each grounded in gstack (below).
+1. **An archetype** — the builder you are (Architect, Brute-Force Architect, Velocity Machine, Quality Guardian, The Director, …), named from your sessions.
+2. **A 0–10 scorecard** across **four dimensions** (Execution, Planning, Steering, Engineering), each grounded in gstack (below).
 3. **Your signature moves** — the decision-patterns in how you direct the AI ("you review more than you write", "plan wide, then grind narrow"), drawn from real session behavior and tagged to the gstack stage each expresses.
 4. **Your growth edge** — a few specific things to try next, keyed to your *own* weakest signals and the gstack skill that addresses each — not generic advice.
 5. **A "what we noticed" card grid** + Share buttons (Post on X / Copy caption / Download a 1200×630 image card that works in every browser).
@@ -47,11 +47,19 @@ Claude/GPT and it'll write you a deeper profile locally. That's optional; the HT
 
 ## How scores are graded — grounded in gstack, not an arbitrary scale
 
-The five axes aren't a rubric we invented in a vacuum. Each one is **derived from
+The four axes aren't a rubric we invented in a vacuum. Each one is **derived from
 [Garry Tan's gstack](https://github.com/garrytan/gstack)** — his open-source framework that turns
 Claude Code into a virtual engineering team. gstack and YC's Paxel both come out of Garry-Tan-world,
 so grounding the scores in gstack's *actual* definitions of good building is plausibly closer to
 what Paxel itself grades against — and it's a more honest story than a number we made up.
+
+We then **audited the rubric by running the real gstack skills on it** — `/plan-eng-review`,
+`/plan-ceo-review`, and `/review`, dispatched as independent subagents so the tool's author wasn't
+grading their own work. That audit hardened the design: **each metric is now owned by exactly one
+axis** (so no two axes secretly move together), Execution and Steering no longer pull against each
+other, and a fifth "Product Instinct" axis — which Paxel has — was **cut**, because the review showed
+it was mostly skill-detection plus terms recycled from other axes. Coding transcripts don't honestly
+reveal product judgment, so we don't fake a score for it.
 
 gstack frames building as a sprint — **Think → Plan → Build → Review → Test → Ship → Reflect** — on
 top of three ethos pillars: **Boil the Lake** (completeness is cheap with AI, so do the complete
@@ -62,11 +70,10 @@ honestly measure from transcripts:
 
 | Axis | What it measures | Grounded in |
 |---|---|---|
-| **Execution** | Shipped output at AI leverage — gold-standard git churn rate (modestly coverage-corrected, ≤1.4×, and disclosed in `report.md`), delegation/parallelism, sustained build sessions | gstack's **Build** phase + the "Golden Age" ethos (one builder shipping like a team) |
-| **Planning** | Think-before-build — exploring & searching before writing, plan/spec ceremony, reasoning depth | gstack's **Think + Plan** phases + "Search Before Building" |
-| **Steering** | Hands-on direction — staying in the loop, interrupting long chains, asking hard questions | "**User Sovereignty**" + the **Review** gate (experts stay hands-on) |
-| **Engineering** | Craft & low rework — clean focused changes, little file-thrash, review/test/investigate discipline | "**Boil the Lake**" + the **Review / Test / Reflect** stages |
-| **Product Instinct** | Reframe-before-build — rethinking the product (brainstorm, challenge premises, build broadly) before executing the ticket. ⚠ *Softest-signal axis* — transcripts barely see product judgment, and the card says so | gstack's **CEO / office-hours** layer (find the 10-star product) |
+| **Execution** | Shipped output at AI leverage — committed-code rate (coverage-corrected, ≤1.4×, disclosed in `report.md`), **fidelity** (how much of what you generate actually lands in git), and delegation/parallelism | gstack's **Build** phase + the "Golden Age" ethos (one builder shipping like a team) |
+| **Planning** | Think-before-build — exploring before writing, prompt sophistication, reasoning depth, and plan/spec ceremony | gstack's **Think + Plan** phases + "Search Before Building" |
+| **Steering** | Hands-on direction — short agent chains, how often the agent checks in with you, and review/careful discipline | "**User Sovereignty**" + the **Review** gate (experts stay hands-on) |
+| **Engineering** | Craft & low rework — getting files right early, little file-thrash, low error rate, and review/test/investigate discipline | "**Boil the Lake**" + the **Review / Test / Reflect** stages |
 
 **Signature moves** (`signature_moves`) and the **growth edge** (`growth_edges`) are the same idea applied
 to prose: named decision-patterns and next-steps, each gated on a real threshold (we never pad), tied to
@@ -75,14 +82,13 @@ weakest gap — e.g. low Steering → `/careful`; review ≫ test → `/qa`; fil
 
 How the criteria were built: one subagent per axis read the real gstack role/skill definitions
 (`office-hours`, `autoplan`, `plan-ceo-review`, `review`, `qa`, `investigate`, `ship`, `retro`, …)
-and the ethos, derived that axis's notion of "good," then mapped it onto paxel's available metrics.
-Every term is transparent, clamped 0–1 against a justified target, and weighted to sum to 1.0 — read
-`compute_scores` in `paxel.py`; nothing is hidden. Honest limits: paxel can't see test *coverage* from
-transcripts, so "completeness" is proxied by quality-ceremony skill use + low rework. And **Product
-Instinct is deliberately the softest axis** — coding transcripts barely reveal product judgment, so we
-proxy it from reframe-before-build skill use + premise-challenging questions and *flag it as soft on the
-card itself* rather than pretend it's as solid as the other four. We'd rather show the seams than fake a
-confident number.
+and the ethos, derived that axis's notion of "good," then mapped it onto paxel's available metrics —
+and a later round of gstack-skill audits hardened it (above). Every term is transparent, clamped 0–1
+against a justified target, and weighted to sum to 1.0 — read `compute_scores` in `paxel.py`; nothing
+is hidden. Honest limits we don't paper over: paxel can't see test *coverage* from transcripts (so
+"completeness" is proxied by quality-ceremony use + low rework); the git-vs-tool fidelity signal is
+noisier when git only sees some of your repos; and Engineering's iteration signals only see `Edit`/`Write`
+work, not files you rewrite purely through the shell. Scores are an opinion; the counts underneath are fact.
 
 ## Sources
 

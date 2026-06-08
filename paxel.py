@@ -1064,23 +1064,28 @@ def write_narrative_input(s, opening_prompts, longest_prompts):
 # Sovereignty" (AI recommends, the human decides — and per Anthropic's own
 # research, experts interrupt MORE, not less). Each axis below maps a slice of
 # that framework onto the metrics paxel can honestly measure from transcripts.
+#
+# The rubric was then AUDITED by running the real installed gstack skills
+# (/plan-eng-review, /plan-ceo-review, /review) via independent subagents. That
+# audit drove the current design: each metric is owned by EXACTLY ONE axis (so no
+# two axes silently move together), Execution/Steering no longer anti-correlate,
+# and a 5th "Product Instinct" axis was CUT — the audit showed it was mostly
+# skill-detection plus terms recycled from other axes, i.e. it didn't honestly
+# measure product judgment. Coding transcripts don't reveal that, so we don't fake it.
 # ---------------------------------------------------------------------------
 REPO_URL = "https://github.com/Photobombastic/paxel-local"
 
 # Plain-language explanation shown under each score bar — what the axis measures, in
 # human terms, no jargon. (The gstack grounding lives in the disclaimer + README, not here.)
 SCORE_NOTES = {
-    "Execution": "How much you ship, and how fast — committed code, work you hand off to "
-                 "agents, and long focused build sessions.",
-    "Planning": "How much you think before you build — reading and exploring before writing, "
-                "and laying out a plan first.",
+    "Execution": "How much you ship, and how fast — your committed-code rate, how much of what "
+                 "you generate actually lands in git, and how hard you delegate to agents.",
+    "Planning": "How much you think before you build — exploring before writing, structured "
+                "prompts, reasoning depth, and laying out a plan first.",
     "Steering": "How hands-on you stay — short agent chains and frequent check-ins, "
                 "rather than pointing the agent and letting it run unchecked.",
-    "Engineering": "How clean your work is — focused changes, not re-editing the same file "
-                   "over and over, and checking your work.",
-    "Product Instinct": "Whether you rethink the problem before building it — brainstorming and "
-                        "questioning the ask, not just doing the ticket. ⚠ Softest signal — product "
-                        "thinking rarely shows up in transcripts, so take this one with a grain of salt.",
+    "Engineering": "How clean your work is — getting files right early, not re-editing the same "
+                   "one over and over, low error rate, and checking your work.",
 }
 
 
@@ -1122,127 +1127,93 @@ def _ev(credit, ev):
 
 
 def compute_scores(stats):
-    # Five axes, each DERIVED FROM Garry Tan's gstack (see the module note above) —
-    # one paxel subagent per axis read the real gstack role/skill definitions and
-    # mapped them onto the metrics paxel can honestly measure. Weights sum to 1.0
-    # per axis; every term is clamped to 0..1 against a justified, gstack-anchored
-    # target. The skill-ceremony terms match the BEHAVIOR gstack prescribes
-    # (plan/review/qa/investigate), detected via whatever skills implement it —
-    # gstack's own command names plus the wider ecosystem's equivalents.
-    #
-    # The 5th axis, "Product Instinct", is DELIBERATELY THE SOFTEST — coding transcripts
-    # barely reveal product judgment, so we proxy it from reframe-before-build skill use +
-    # premise-challenging questions and flag it as soft on the card itself, rather than
-    # either faking a confident number or dropping it. Show the seams, don't fake them.
+    # FOUR axes, grounded in gstack (module note above) and then hardened by a gstack
+    # self-audit. Design rules the audit enforced:
+    #   1. Each metric is owned by EXACTLY ONE axis — no metric drives two axes, so the
+    #      axes are genuinely independent (no hidden correlation).
+    #   2. actions_per_prompt lives ONLY in Steering (hands-on cadence); Execution no
+    #      longer rewards it, so the two axes don't anti-correlate by construction.
+    #   3. iteration_depth_p90 lives ONLY in Engineering; questions_asked ONLY in Steering.
+    #   4. Skill-detection terms are kept but de-weighted (a builder who plans in Notion
+    #      and reviews on GitHub shouldn't score 0) — behavior carries the axes.
+    # Weights sum to 1.0 per axis; every term is clamped 0..1 against a justified target;
+    # `_ev` pulls the INVERSE terms toward neutral on a thin corpus.
     v, b, vel = stats["volume"], stats["behavior"], stats["velocity"]
     if v["total_sessions"] == 0 or v["tool_calls_total"] == 0:
         # No real activity → don't manufacture a flattering "Quality Guardian 9.0"
-        return {"Execution": 0.0, "Planning": 0.0, "Steering": 0.0, "Engineering": 0.0,
-                "Product Instinct": 0.0}
+        return {"Execution": 0.0, "Planning": 0.0, "Steering": 0.0, "Engineering": 0.0}
     sess = max(v["total_sessions"], 1)
     prompts = max(v["total_prompts"], 1)
     hours = max(vel["active_hours"], 0.1)
     ev = _evidence(stats)   # 0..1 confidence; gates the inverse terms so a thin corpus
                             # can't read as flawless (no-op at ev=1.0 for any real user).
 
-    # EXECUTION — gstack's BUILD phase + the "Golden Age" ethos: shipped output at
-    # AI leverage. The throughput signal is gold-standard git churn (what actually
-    # shipped, not tool-churn which inflates via iteration — Garry himself disclaims
-    # raw LOC). But git often sees only some of a corpus's repos (non-git dirs,
-    # cwd→repo gaps), so we nudge the rate up by git coverage rather than penalize a
-    # builder for repos paxel couldn't read. The boost is deliberately MODEST — floored
-    # at 0.7, i.e. at most ~1.4× — because the unseen repos may not have shipped at the
-    # same rate; we nudge, we don't extrapolate, and the report DISCLOSES when this
-    # correction fired (honesty > flattery). Normalized per active hour so a long corpus
-    # can't game it; clamped so a brute-forcer can't run it to 10.
+    # EXECUTION — shipped output at AI leverage. Three signals, no overlap with other axes:
+    #   (a) RATE: gold-standard git churn per active hour (coverage-corrected — git often
+    #       sees only some repos; we nudge ≤1.4× by coverage rather than penalize, and the
+    #       report discloses it). (b) FIDELITY: how much of what you GENERATED actually got
+    #       committed — git churn vs tool churn — the audit's headline "are you shipping or
+    #       just exploring" signal (also coverage-corrected). (c) DELEGATION/parallelism.
+    #   Dropped vs the old version: actions_per_prompt (moved to Steering) and raw session
+    #   length (the audit called it noise — a long distracted session isn't execution).
     git_cov = max(vel["git_repos_with_commits"] / max(vel["git_repos_seen"], 1), 0.7)
-    eff_git_ln_per_hr = (vel["git_churn_total"] / hours) / git_cov
+    eff_git_churn = vel["git_churn_total"] / git_cov
+    fidelity = eff_git_churn / max(vel["tool_churn_edit_write"], 1)
     execution = 10 * (
-        0.35 * _clamp(eff_git_ln_per_hr / 400)                            # shipped git output rate, coverage-corrected
-        + 0.30 * _clamp((b["delegate_actions"] + b["background_tasks"]) / max(prompts * 0.3, 1))  # delegation/parallelism
-        + 0.20 * _clamp(b["actions_per_prompt"] / 12)                     # leverage: work per human prompt
-        + 0.15 * _clamp(b["avg_session_minutes"] / 75))                   # sustained build sessions
+        0.40 * _clamp((eff_git_churn / hours) / 400)                      # committed-code rate, coverage-corrected
+        + 0.25 * _clamp(fidelity / 0.5)                                   # ship-vs-generate fidelity (committed / generated)
+        + 0.35 * _clamp((b["delegate_actions"] + b["background_tasks"]) / max(prompts * 0.3, 1)))  # delegation/parallelism
 
-    # PLANNING — gstack's THINK+PLAN phases + "Search Before Building": explore and
-    # search before writing, run plan/spec ceremony, reason deeply before deciding.
+    # PLANNING — think before you build. Behavior-led (the duplicate explore-ratio term the
+    # audit flagged is gone — planning_ratio already captures it); prompt sophistication
+    # raised (the audit's "most honest proxy for the human's thinking"); skill term de-weighted.
     plan_skills = _skill_uses_any(stats, ("brainstorm", "writing-plan", "plan", "spec",
                                           "office-hours", "autoplan", "grill", "ceo-review",
                                           "eng-review", "design-review"))
     planning = 10 * (
-        0.35 * _clamp(b["planning_ratio_explore_to_doing"] / 0.65)        # explore-to-doing: think before build
-        + 0.25 * _clamp((plan_skills / sess) / 0.8)                       # plan/spec ceremony, session-normalized like the other skill terms
-        + 0.20 * _clamp((v["thinking_blocks"] / sess) / 12.0)            # reasoning depth per session
-        + 0.15 * _clamp((b["explore_actions"] / max(b["produce_actions"] + b["execute_actions"], 1)) / 1.5)  # search before building
-        + 0.05 * _clamp(v["avg_prompt_length_chars"] / 500.0))           # forcing-question depth (substantive prompts)
+        0.35 * _clamp(b["planning_ratio_explore_to_doing"] / 0.65)        # explore-before-build (behavioral)
+        + 0.25 * _clamp(v["avg_prompt_length_chars"] / 600.0)            # prompt sophistication — the human's thinking
+        + 0.20 * _clamp((v["thinking_blocks"] / sess) / 12.0)           # reasoning depth per session
+        + 0.20 * _clamp((plan_skills / sess) / 0.8))                     # plan/spec ceremony, session-normalized, de-weighted
 
-    # STEERING — gstack's "User Sovereignty": AI recommends, the human decides.
-    # Per the Anthropic finding gstack cites, experts interrupt MORE, not less.
-    # Anchored to RATIOS (per-prompt) so verbosity ≠ steering. Avoids
-    # error_recovery_ratio (saturates ~1.0 for everyone → no signal).
-    steer_skills = _skill_uses_any(stats, ("review", "careful", "investigate",
-                                           "office-hours", "code-review"))
-    # The first two are INVERSE terms (high when a metric is low) — wrapped in _ev so an
-    # inactive corpus, where actions/prompt and p90 are 0, doesn't read as "maximally
-    # hands-on." The question-rate and skill terms are presence-based (0 = didn't do it),
-    # so they need no gating.
+    # STEERING — User Sovereignty: how much the human stays in control. PURELY BEHAVIORAL
+    # (no skill-detection — review/qa are craft, they live in Engineering): owns
+    # actions_per_prompt (hands-on cadence) and questions_asked (how often the agent stopped
+    # to ask YOU — low = you let it run). p90 was removed (it's Engineering's only).
     steering = 10 * (
-        0.38 * _ev(_clamp((15 - b["actions_per_prompt"]) / 11), ev)      # hands-on cadence: fewer actions/prompt = more in the loop
-        + 0.32 * _ev(_clamp((10 - b["iteration_depth_p90"]) / 8), ev)    # break-in: lower p90 = redirects sooner
-        + 0.22 * _clamp((b["questions_asked"] / prompts) / 0.05)         # interrogation rate (per prompt, not raw count)
-        + 0.08 * _clamp(steer_skills / max(sess * 0.5, 1)))             # staying in the verification loop
+        0.55 * _ev(_clamp((15 - b["actions_per_prompt"]) / 11), ev)      # hands-on cadence: fewer agent actions per prompt = more in the loop
+        + 0.45 * _clamp((b["questions_asked"] / prompts) / 0.05))        # how often the agent checked in with you (per prompt)
 
-    # ENGINEERING — gstack's "Boil the Lake" + Review/Test/Reflect: clean low-rework
-    # changes plus evidence of the quality ceremonies. NOTE: paxel can't see test
-    # COVERAGE from transcripts, so completeness is proxied by (a) ceremony-skill use
-    # and (b) low rework (changes that didn't need hammering). Ceremony weight trimmed
-    # to 0.22 (from the axis author's 0.30) so the axis isn't dominated by named-skill
-    # detection for users who don't run skills.
-    churn_back = vel["git_deletions"] / max(vel["git_insertions"], 1)
-    eng_skills = _skill_uses_any(stats, ("review", "test", "tdd", "qa", "investigate",
+    # ENGINEERING — craft / low rework. The old churn_back term (deletion ratio) was CUT:
+    # it scored a clean refactor as "thrash" and gave a perfect score to anyone who never
+    # committed. Replaced by iteration_depth_mean ("did you get the file right early"), the
+    # honest rework signal. p90 + file-hammering stay here (their only home). Ceremony de-weighted.
+    # "code-review" (not bare "review") so this doesn't greedily match Planning's
+    # plan-eng-review / plan-design-review / ceo-review ceremonies (which live in plan_skills).
+    eng_skills = _skill_uses_any(stats, ("code-review", "test", "tdd", "qa", "investigate",
                                          "retro", "learn", "cso", "karpathy", "debug"))
-    # The rework / iteration / thrash / error terms are all INVERSE (high when the bad
-    # metric is low) — wrapped in _ev so a near-empty corpus, where churn/p90/hammering/
-    # errors are all 0, doesn't read as flawless craft. The ceremony term is presence-based.
     engineering = 10 * (
-        0.28 * _ev(1 - _clamp((churn_back - 0.20) / 0.40), ev)          # low rework: some deletion healthy, lots = thrash
-        + 0.22 * _ev(1 - _clamp((b["iteration_depth_p90"] - 3) / 9), ev)  # clean iteration: low typical depth = lands right
-        + 0.18 * _ev(1 - _clamp((b["files_hammered_over_15x"] / sess) / 0.25), ev)  # focused: few hammered files
-        + 0.22 * _clamp((eng_skills / sess) / 3.0)                       # Boil-the-Lake ceremonies: review/qa/investigate/retro
+        0.30 * _ev(1 - _clamp((b["iteration_depth_mean"] - 2) / 8), ev)  # low rework: got files right early
+        + 0.25 * _ev(1 - _clamp((b["iteration_depth_p90"] - 3) / 9), ev)  # clean iteration: low typical depth
+        + 0.20 * _ev(1 - _clamp((b["files_hammered_over_15x"] / sess) / 0.25), ev)  # focused: few hammered files
+        + 0.15 * _clamp((eng_skills / sess) / 3.0)                       # quality ceremonies: review/qa/investigate
         + 0.10 * _ev(1 - _clamp(b["error_rate_per_100_tools"] / 10), ev))  # low error rate: root-cause discipline
 
-    # PRODUCT INSTINCT — gstack's CEO / office-hours layer: do you rethink the PRODUCT
-    # before building it (reframe the request, challenge premises, find the 10-star
-    # version) instead of just executing the ticket as written? This is the SOFTEST axis
-    # by design — coding transcripts barely see product judgment — so we proxy it from
-    # the gstack "reframe before build" skills (brainstorm / office-hours / ceo-review /
-    # design / cso / spec), premise-challenging questions, and how broadly you build.
-    # The scorecard flags it as the softest-signal axis so we stay honest about it.
-    reframe = _skill_uses_any(stats, ("brainstorm", "office-hours", "ceo-review", "cso",
-                                      "design-consultation", "design-shotgun", "spec", "grill"))
-    breadth = len(stats["stack"].get("top_projects", []))
-    product = 10 * (
-        0.50 * _clamp((reframe / sess) / 1.5)                            # reframe-before-build ceremony
-        + 0.30 * _clamp((b["questions_asked"] / prompts) / 0.05)        # challenge the premise (ask, don't assume)
-        + 0.10 * _clamp(breadth / 8)                                     # build across many products
-        + 0.10 * _clamp(b["planning_ratio_explore_to_doing"] / 0.65))   # explore the problem space first
-
     return {"Execution": round(execution, 1), "Planning": round(planning, 1),
-            "Steering": round(steering, 1), "Engineering": round(engineering, 1),
-            "Product Instinct": round(product, 1)}
+            "Steering": round(steering, 1), "Engineering": round(engineering, 1)}
 
 
 def pick_archetype(stats, scores):
-    b, vel, r = stats["behavior"], stats["velocity"], stats["rhythm"]
-    peak = (r["peak_hours_local"] or [12])[0]
+    b, vel = stats["behavior"], stats["velocity"]
     # brute = a HABITUAL grinder (high typical iteration), not one 40-edit outlier session
     brute = b["iteration_depth_p90"] >= 12 or (vel["shell_authored_lines_est"] > 50000
                                                and b["error_rate_per_100_tools"] >= 3)
     plan_hi = scores.get("Planning", 0) >= 7.5
     exec_hi = scores.get("Execution", 0) >= 8
     eng_hi = scores.get("Engineering", 0) >= 7.5
+    steer_hi = scores.get("Steering", 0) >= 7.5
     # when both Execution and Engineering qualify, let the dominant one win the label
     exec_hi = exec_hi and scores.get("Execution", 0) >= scores.get("Engineering", 0)
-    night = peak >= 22 or peak <= 4
     if plan_hi and brute:
         name, q = "Brute-Force Architect", "You plan and scaffold like an architect — then grind the hard parts by hand, in the shell, until they work."
     elif plan_hi:
@@ -1253,10 +1224,12 @@ def pick_archetype(stats, scores):
         name, q = "Velocity Machine", "You move fast, delegate hard, and keep a lot of plates spinning at once."
     elif eng_hi:
         name, q = "Quality Guardian", "You keep churn low and the bar high — measured changes, reviewed twice."
-    elif night:
-        name, q = "Night Owl", "Your best work lands after dark, in long uninterrupted runs."
+    elif steer_hi:
+        name, q = "The Director", "You stay in the loop — short chains, frequent check-ins, no runaway agents."
     else:
-        name, q = "The Builder", "Steady, pragmatic, and tool-driven — you just keep shipping."
+        # No single mode dominates. (Time-of-day isn't a build style — it's a 'what we
+        # noticed' card, not an identity — so Night Owl was retired as an archetype.)
+        name, q = "The Builder", "Balanced and pragmatic — no single mode dominates; you adapt to the problem in front of you."
     return name, q
 
 
@@ -1393,13 +1366,6 @@ def growth_edges(stats, scores):
             f'Engineering is <b>{scores.get("Engineering")}</b>. Add one deliberate review-and-test pass on '
             f'every branch before you ship — that\'s where craft compounds. '
             f'(gstack\'s back half: <code>/review</code>, <code>/qa</code>, <code>/investigate</code>, <code>/retro</code>.)'))
-
-    if scores.get("Product Instinct", 10) < 5:
-        pool.append((scores.get("Product Instinct", 10) + 0.2, "Reframe first",
-            "Challenge the ask before you build it",
-            f'Product Instinct is <b>{scores.get("Product Instinct")}</b> (our softest axis). Before building, '
-            f'write down the real problem and 2–3 alternatives — catch the wrong product before you ship the '
-            f'right code for it. (gstack\'s <code>/office-hours</code> runs six forcing questions for exactly this.)'))
 
     if not pool:
         pool.append((9.0, "Go deeper",
@@ -1633,7 +1599,7 @@ def write_profile_html(stats, archetype, quote, scores):
       'reproducible, not guessed. The <b>0–10 scores are an opinion</b>: a transparent rubric grounded in '
       '<a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">Garry Tan\'s gstack</a>, '
       'not a copy of Paxel\'s closed algorithm. Short version: <b>numbers = fact, scores = opinion.</b></div>')
-    if _evidence(stats) < 0.5:   # < ~100 tool calls: too thin to read habits confidently
+    if _evidence(stats) < 0.5:   # < ~1000 tool calls: too thin to read habits confidently
         P(f'<div class="disclaimer" style="border-left-color:var(--muted)">⚠ <b>Limited data.</b> '
           f'Just {v["total_sessions"]} sessions and {v["tool_calls_total"]:,} tool calls here — not enough to read '
           f'your habits with confidence, so these scores lean toward the middle. Run more and check back.</div>')
