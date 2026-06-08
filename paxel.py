@@ -1009,8 +1009,8 @@ SCORE_NOTES = {
     "Engineering": "How clean your work is — focused changes, not re-editing the same file "
                    "over and over, and checking your work.",
     "Product Instinct": "Whether you rethink the problem before building it — brainstorming and "
-                        "questioning the ask, not just doing the ticket. ⚠ Our softest read — "
-                        "transcripts barely show this.",
+                        "questioning the ask, not just doing the ticket. ⚠ Softest signal — product "
+                        "thinking rarely shows up in transcripts, so take this one with a grain of salt.",
 }
 
 
@@ -1260,21 +1260,20 @@ def growth_edges(stats, scores):
             "Interrupt during, not just review after",
             f'{lead} — you questioned the agent on only <b>{qrate*100:.0f}%</b> of prompts. '
             f'Break in on risky steps and redirect long chains <i>while</i> they run, instead of only '
-            f'reviewing after. Experts interrupt more, not less. (gstack names this guardrail <code>/careful</code>.)'))
+            f'reviewing after. (gstack calls this <code>/careful</code>.)'))
 
     if rev >= 50 and tdd < max(rev * 0.1, 5):
         pool.append((1.5, "Add a reflex",
             "Pair your review reflex with a test reflex",
             f'<b>{rev:,}</b> code-reviews vs <b>{tdd}</b> test runs. Make the double-check a <i>regression '
-            f'test</i>: write one for every bug you fix before you move on. Tests are the cheapest thing to '
-            f'add with AI. (gstack\'s <code>/qa</code> does this automatically.)'))
+            f'test</i>: write one for every bug you fix before you move on. (gstack\'s <code>/qa</code> does this automatically.)'))
 
     if b["iteration_depth_max"] >= 40 or b["files_hammered_over_15x"] >= 10:
         pool.append((2.0, "Stop the grind",
             "Root-cause instead of whack-a-mole",
             f'<b>{b["iteration_depth_max"]}×</b> on one file, <b>{b["files_hammered_over_15x"]}</b> files past '
             f'15 edits. When a file resists past ~15 tries, stop and find the root cause before the next edit '
-            f'instead of re-trying. (gstack names this discipline <code>/investigate</code> — no fixes without investigation.)'))
+            f'instead of retrying. (gstack names this discipline <code>/investigate</code> — no fixes without investigation.)'))
 
     if scores.get("Planning", 10) < 6:
         pool.append((scores.get("Planning", 10), "Plan first",
@@ -1355,17 +1354,18 @@ _PROFILE_CSS = """<style>
   .hero .sub{color:var(--muted);margin-top:18px;font-size:15px;max-width:680px} .hero .sub b{color:var(--text)}
   .stat-strip{display:flex;flex-wrap:wrap;gap:24px;margin-top:28px;padding-top:24px;border-top:1px solid var(--line)}
   .stat-strip div{display:flex;flex-direction:column} .stat-strip .n{font-family:var(--serif);font-size:25px;font-weight:700} .stat-strip .l{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-  .share{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:24px} .share .lbl{font-size:13px;color:var(--muted)}
+  .share{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:34px} .share .lbl{font-size:13px;color:var(--muted)}
   .btn{display:inline-flex;align-items:center;gap:8px;padding:9px 15px;border-radius:999px;cursor:pointer;font-weight:600;font-size:14px;color:#fff;border:1px solid transparent;font-family:var(--sans)}
   .btn:hover{text-decoration:none;opacity:.9} .btn.x{background:#000} .btn.ghost{background:#fff;color:var(--slate);border-color:var(--line)}
   .btn svg{width:15px;height:15px} .btn.x svg{fill:#fff}
-  h2.section{font-family:var(--display);font-size:14px;text-transform:uppercase;letter-spacing:.18em;color:var(--slate);margin:54px 0 14px;font-weight:700}
+  h2.section{font-family:var(--display);font-size:15px;text-transform:uppercase;letter-spacing:.18em;color:var(--slate);margin:60px 0 14px;font-weight:700}
   p.lead{color:var(--muted);font-size:14.5px;margin:-4px 0 20px;max-width:700px;line-height:1.55}
   .card code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:#eef1f3;color:var(--beak-deep);padding:1px 5px;border-radius:4px}
   .disclaimer{background:#fff;border:1px solid var(--line);border-left:4px solid var(--beak);border-radius:6px;padding:14px 16px;margin:-6px 0 24px;font-size:13.5px;color:#48535b;line-height:1.55} .disclaimer b{color:var(--text)}
   .score{display:grid;grid-template-columns:160px 1fr 46px;align-items:center;gap:14px;margin:0 0 14px} .score .name{font-weight:600;font-size:15px}
   .score .track{height:12px;background:#dde2e6;border-radius:999px;overflow:hidden} .score .fill{height:100%;background:linear-gradient(90deg,var(--beak-deep),var(--beak));border-radius:999px}
-  .score .val{font-weight:800;text-align:right} .score .note{grid-column:1/-1;color:var(--muted);font-size:13px;margin:-6px 0 4px}
+  .score .val{font-weight:800;text-align:right} .score .note{grid-column:1/-1;color:var(--muted);font-size:13px;margin:-6px 0 4px;padding-left:174px}
+  @media(max-width:560px){.score .note{padding-left:0}}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:14px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px 18px 16px;box-shadow:0 1px 2px rgba(20,30,40,.04)} .card.flag{border-left:4px solid var(--beak)}
   .card .q{color:var(--beak-deep);font-size:12.5px;font-weight:700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.03em}
@@ -1391,7 +1391,7 @@ def write_profile_html(stats, archetype, quote, scores):
 
     peak = (r["peak_hours_local"] or [12])[0]
     tod = ("Night owl" if (peak >= 22 or peak <= 4) else "Morning person" if peak <= 11
-           else "Daytime builder" if peak <= 16 else "Dusk builder")
+           else "Afternoon" if peak <= 16 else "Evening")
     wd = r["weekday_histogram"]
     wknd = wd.get("Sat", 0) + wd.get("Sun", 0)
     wkday_avg = sum(wd.get(d, 0) for d in ["Mon", "Tue", "Wed", "Thu", "Fri"]) / 5 or 1
@@ -1409,22 +1409,35 @@ def write_profile_html(stats, archetype, quote, scores):
     # The coral left-bar (flag=True) means exactly one thing: "this is an action item."
     # It is used ONLY on the Growth-edge cards. Signature-move and What-we-noticed cards
     # are descriptive, so they stay plain — no flags here.
+    h12 = f'{(peak - 1) % 12 + 1}{"am" if peak < 12 else "pm"}'   # 17 -> "5pm", 0 -> "12am"
+    _DAYFULL = {"Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday", "Thu": "Thursday",
+                "Fri": "Friday", "Sat": "Saturday", "Sun": "Sunday"}
+    busy_day = _DAYFULL.get((r["preferred_days"] or ["—"])[0], (r["preferred_days"] or ["—"])[0])
+    weekend_d = (f'Your busiest day is {busy_day} — and you logged time most days, weekends included.'
+                 if weekend_a == "No days off" else f'Your busiest day is {busy_day}; weekends stay quiet.')
+    two_gears = v["avg_prompt_length_chars"] > v["median_prompt_length_chars"] * 2
+    prompt_a = "Short, with the odd essay" if two_gears else "Consistent length"
+    prompt_d = (f'Half run under {v["median_prompt_length_chars"]:,.0f} characters — quick commands — '
+                f'but the average is {v["avg_prompt_length_chars"]:,.0f}.' if two_gears else
+                f'Median {v["median_prompt_length_chars"]:,.0f} characters, average {v["avg_prompt_length_chars"]:,.0f} — pretty steady.')
+    # "What we noticed" — question-framed eyebrows + plain second-person copy (no jargon).
     cards = [
-        _card("How much did you ship?", "Three numbers, honestly",
-              f'{vel["tool_churn_edit_write"]:,} lines via Edit/Write, ~{vel["shell_authored_lines_est"]:,} more in the shell — '
-              f'but git-committed (gold standard) only <b>{vel["git_churn_total"]:,}</b> across {git_pct} repos on disk.'),
-        _card("Iteration depth", f'{b["iteration_depth_max"]}× on one file',
-              f'Max edits to a single file in one session; {b["files_hammered_over_15x"]} files >15×. Mean is just {b["iteration_depth_mean"]}.'),
-        _card("Course-correction", f'{b["tool_errors"]:,} errors, {round(b["error_recovery_ratio"]*100)}% recovered',
-              f'{b["error_rate_per_100_tools"]} errors per 100 tool calls — recovered on the fly.'),
-        _card("Model of choice", model_a, model_d),
-        _card("Most productive", tod, f'Peak activity around {peak:02d}:00 local.'),
-        _card("Weekends?", weekend_a, f'Busiest day: {(r["preferred_days"] or ["—"])[0]}.'),
-        _card("Prompt length", "Two gears" if v["avg_prompt_length_chars"] > v["median_prompt_length_chars"]*2 else "Consistent",
-              f'Median {v["median_prompt_length_chars"]:.0f} chars, mean {v["avg_prompt_length_chars"]:.0f}.'),
-        _card("Agents run", f'{b["delegate_actions"]:,} subagents',
-              f'~{per_sess} per session, plus {b["background_tasks"]:,} background &amp; {b["scheduled_actions"]} scheduled.'),
-        _card("Tool of choice", top_tool_name, f'{top_tool[1]:,} calls — your most-used tool by far.'),
+        _card("How much did you ship?", "Depends how you count",
+              f'Edit/Write touched <b>{vel["tool_churn_edit_write"]:,}</b> lines and the shell ~{vel["shell_authored_lines_est"]:,} '
+              f'more — but only <b>{vel["git_churn_total"]:,}</b> actually landed in committed git history. '
+              f'That committed number is the honest one.'),
+        _card("How hard do you grind?", f'{b["iteration_depth_max"]}× on one file',
+              f'Your deepest single-file grind in one session — and {b["files_hammered_over_15x"]} files went past 15 edits. '
+              f'Your typical file, though? About {b["iteration_depth_mean"]:.1f}.'),
+        _card("How often do things break?", f'{b["tool_errors"]:,} errors, {round(b["error_recovery_ratio"]*100)}% recovered',
+              f'Roughly {b["error_rate_per_100_tools"]} per 100 tool calls — and you kept going after almost all of them.'),
+        _card("Which model do you reach for?", model_a, model_d),
+        _card("When do you do your best work?", tod, f'You do your heaviest work around {h12}.'),
+        _card("Do you take weekends off?", weekend_a, weekend_d),
+        _card("How long are your prompts?", prompt_a, prompt_d),
+        _card("How many agents do you run?", f'{b["delegate_actions"]:,} subagents',
+              f'About {per_sess} per session, plus {b["background_tasks"]:,} background tasks and {b["scheduled_actions"]} scheduled runs.'),
+        _card("What's your go-to tool?", top_tool_name, f'{top_tool[1]:,} calls — more than any other tool.'),
     ]
 
     score_rows = "".join(
@@ -1478,15 +1491,14 @@ def write_profile_html(stats, archetype, quote, scores):
     P(f'<p class="eyebrow">{eyebrow}</p>')
     P(f'<h1>You\'re a<br><span class="accent">{_h.escape(archetype)}.</span></h1>')
     P(f'<p class="quote">“{_h.escape(quote)}”</p>')
-    P(f'<p class="sub">Plumbing: <b>{v["thinking_blocks"]:,} reasoning blocks</b> before the diff. '
-      f'Grind: <b>{b["iteration_depth_max"]}× on one file</b>, <b>~{vel["shell_authored_lines_est"]:,} lines</b> in the shell, '
-      f'<b>{b["tool_errors"]:,} errors</b> recovered. The counts are real; the verdict is a rubric.</p>')
+    P(f'<p class="sub"><b>{v["thinking_blocks"]:,} reasoning blocks</b> before the diffs, '
+      f'<b>{b["delegate_actions"]:,} subagents</b> dispatched, and <b>{b["tool_errors"]:,} errors</b> recovered from along the way.</p>')
     P('<div class="stat-strip">'
-      f'<div><span class="n mono">{vel["git_churn_total"]:,}</span><span class="l">git lines (gold-std)</span></div>'
-      f'<div><span class="n mono">{vel["tool_churn_edit_write"]:,}</span><span class="l">tool-authored lines</span></div>'
-      f'<div><span class="n mono">~{vel["shell_authored_lines_est"]:,}</span><span class="l">shell-authored lines</span></div>'
+      f'<div><span class="n mono">{vel["git_churn_total"]:,}</span><span class="l">lines committed to git</span></div>'
+      f'<div><span class="n mono">{vel["tool_churn_edit_write"]:,}</span><span class="l">lines via Edit/Write</span></div>'
+      f'<div><span class="n mono">~{vel["shell_authored_lines_est"]:,}</span><span class="l">lines in the shell</span></div>'
       f'<div><span class="n mono">{b["iteration_depth_max"]}</span><span class="l">max edits, one file</span></div>'
-      f'<div><span class="n mono">{b["delegate_actions"]:,}</span><span class="l">subagents</span></div></div>')
+      f'<div><span class="n mono">{b["delegate_actions"]:,}</span><span class="l">agents you ran</span></div></div>')
     P('<div class="share"><span class="lbl">Share:</span>'
       '<a id="share-x" class="btn x" href="#" target="_blank" rel="noopener">'
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77Z"/></svg>Post on X</a>'
@@ -1500,15 +1512,15 @@ def write_profile_html(stats, archetype, quote, scores):
     P(score_rows)
     if moves:
         P('<h2 class="section">Your signature moves</h2>')
-        P('<p class="lead">The patterns in how you direct the AI — pulled from your real sessions, each '
-          'tagged to the gstack sprint stage it expresses.</p>')
+        P('<p class="lead">The patterns in how you direct the AI, pulled from your real sessions. The tag on each '
+          'card is the gstack stage it maps to.</p>')
         P(f'<div class="grid">{moves_html}</div>')
     if edges:
         P('<h2 class="section">Your growth edge</h2>')
-        P('<p class="lead">A few specific things to try next — keyed to your <i>own</i> weakest signals, not '
-          'generic advice. Each is a habit you can adopt today; the <code>/commands</code> in parentheses are '
-          'optional skills from <a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">gstack</a> '
-          '(Garry Tan\'s toolkit) — the named, installable version of that habit if you want it.</p>')
+        P('<p class="lead">A few habits to try — each pulled from your own data, not a generic checklist. The '
+          '<code>/commands</code> in parentheses are optional tools from '
+          '<a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">gstack</a> '
+          'if you\'d rather automate one of them.</p>')
         P(f'<div class="grid">{edges_html}</div>')
     P('<h2 class="section">What we noticed</h2><div class="grid">')
     P("".join(cards))
