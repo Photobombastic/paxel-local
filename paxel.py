@@ -1491,10 +1491,10 @@ def write_profile_html(stats, archetype, quote, scores):
       '<button id="share-copy" class="btn ghost" type="button">📋 Copy caption</button>'
       '<button id="share-img" class="btn ghost" type="button">🖼 Download image</button></div>')
     P('</section><h2 class="section">Your scorecard</h2>')
-    P('<div class="disclaimer"><b>How to read this.</b> The counts are <b>measured from your real transcripts and reproducible</b>. '
-      'The 0–10 scores are a <b>transparent rubric grounded in <a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">Garry Tan\'s gstack</a></b> — '
-      'each axis is derived from gstack\'s actual sprint (Think → Plan → Build → Review → Test → Ship → Reflect) and ethos, not an arbitrary scale. '
-      'Paxel\'s own algorithm is closed, so this is a reasoned estimate, <b>not a replica</b>. Numbers = fact, scores = opinion.</div>')
+    P('<div class="disclaimer"><b>How to read this.</b> The <b>counts are measured</b> from your real sessions — '
+      'reproducible, not guessed. The <b>0–10 scores are an opinion</b>: a transparent rubric grounded in '
+      '<a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">Garry Tan\'s gstack</a>, '
+      'not a copy of Paxel\'s closed algorithm. Short version: <b>numbers = fact, scores = opinion.</b></div>')
     P(score_rows)
     if moves:
         P('<h2 class="section">Your signature moves</h2>')
