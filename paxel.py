@@ -400,6 +400,24 @@ def _gemini_events(fp):
                    "message": {"role": "assistant", "content": blocks}}
 
 
+# Politeness markers in your own prompts (for the "how polite are you" card). Word-boundaried.
+_POLITE_RE = re.compile(r'\b(thanks|thank you|thank u|thx|please|pls|appreciate|'
+                        r'much appreciated|good (?:job|work)|nice work|well done)\b', re.I)
+
+
+def _open_in_browser(path):
+    """Best-effort: pop the finished profile in the default browser. Silent if it can't
+    (headless / SSH / CI) — we just fall back to printing the path. Pass --no-open to skip."""
+    try:
+        import webbrowser
+        if webbrowser.open("file://" + os.path.abspath(path)):
+            print("  opened profile.html in your browser (pass --no-open to skip)")
+            return
+    except Exception:
+        pass
+    print("  open it yourself:", path)
+
+
 def main():
     # Sources to analyze: pass names as args (e.g. `python3 paxel.py claude`) to
     # restrict; default is every detected source. ("claude" keeps it to your own
@@ -428,6 +446,7 @@ def main():
     GAP_CAP_S = 600                   # cap idle gaps at 10 min when summing active time
 
     prompts_count = 0
+    polite_prompts = 0         # prompts that say please / thanks / etc.
     prompt_lengths = []        # chars of genuine typed prompts
     command_invocations = 0
 
@@ -551,6 +570,8 @@ def main():
                                 prompts_count += 1
                                 source_prompts[cur_src] += 1
                                 prompt_lengths.append(len(cleaned))
+                                if _POLITE_RE.search(cleaned):
+                                    polite_prompts += 1
                                 if is_command:
                                     command_invocations += 1
                                 proj = os.path.basename(cwd) if cwd else "?"
@@ -674,15 +695,32 @@ def main():
     # Active time = sum of consecutive inter-event gaps, each capped at GAP_CAP_S,
     # so resumed-session reuse and overnight idle don't inflate engaged time.
     durations_min = []
+    longest_burst_s = 0.0
+    BURST_GAP_S = 1800               # a gap > 30 min ends a contiguous work "run"
     for ts_list in session_ts.values():
         ts_list.sort()
         active_s = 0.0
         for a, bnext in zip(ts_list, ts_list[1:]):
             active_s += min(bnext - a, GAP_CAP_S)
         durations_min.append(active_s / 60.0)
+        # Longest *contiguous* burst (no gap > 30 min). sessionId is reused across
+        # resumed sessions, so a single id can span weeks — max(session duration) is
+        # meaningless; the longest unbroken burst is the honest "longest run."
+        bstart = bprev = None
+        for t in ts_list:
+            if bprev is None:
+                bstart = bprev = t
+            elif t - bprev > BURST_GAP_S:
+                longest_burst_s = max(longest_burst_s, bprev - bstart)
+                bstart = bprev = t
+            else:
+                bprev = t
+        if bstart is not None:
+            longest_burst_s = max(longest_burst_s, bprev - bstart)
     active_hours = sum(durations_min) / 60.0
     avg_session_min = statistics.mean(durations_min) if durations_min else 0
     median_session_min = statistics.median(durations_min) if durations_min else 0
+    longest_run_min = longest_burst_s / 60.0
 
     avg_prompt_len = statistics.mean(prompt_lengths) if prompt_lengths else 0
     median_prompt_len = statistics.median(prompt_lengths) if prompt_lengths else 0
@@ -797,6 +835,8 @@ def main():
             "delegate_actions": delegate,
             "avg_session_minutes": round(avg_session_min, 1),
             "median_session_minutes": round(median_session_min, 1),
+            "longest_run_minutes": round(longest_run_min, 1),
+            "polite_prompts": polite_prompts,
             "error_recovery_ratio": round(error_recovery_ratio, 3),
             "error_rate_per_100_tools": round(error_rate_per_100_tools, 1),
             "tool_errors": tool_errors,
@@ -845,6 +885,8 @@ def main():
     archetype, quote = pick_archetype(stats, scores)
     write_profile_html(stats, archetype, quote, scores)
     print("\nWrote stats.json, report.md, narrative_input.md, profile.html to", OUT_DIR)
+    if "--no-open" not in sys.argv:
+        _open_in_browser(os.path.join(OUT_DIR, "profile.html"))
     print(f"  archetype: {archetype}  scores: {scores}")
     print(f"  sources: " + ", ".join(f"{s}({source_files[s]}f/{len(source_sessions[s])}s)"
                                       for s in sorted(source_files)))
@@ -1032,6 +1074,23 @@ def _skill_uses_any(stats, needles):
                if any(nd in k.lower() for nd in needles))
 
 
+def _evidence(stats):
+    """How much activity we actually have to judge habits on, 0..1. ~1.0 for any real
+    corpus, near 0 for a thin one. Used to stop 'absence of a signal' from reading as
+    'did it perfectly' in the inverse score terms — a barely-used corpus shouldn't grade
+    as a flawless builder. (See _ev and the LOW_DATA flag in write_profile_html.)"""
+    return _clamp(stats["volume"]["tool_calls_total"] / 200)
+
+
+def _ev(credit, ev):
+    """Pull an ABSENCE-reward score term toward a neutral 0.5 when evidence (ev) is low,
+    so 'no data' lands at the midpoint (admitted uncertainty) instead of a flattering 1.0.
+    At ev=1.0 (any real corpus) this returns `credit` unchanged — a true no-op for real
+    users; it only ever bites thin corpora. Apply ONLY to inverse terms (those that score
+    high when a 'bad' metric is low/zero); presence terms already score 0 for 'didn't do it'."""
+    return 0.5 * (1 - ev) + ev * credit
+
+
 def compute_scores(stats):
     # Five axes, each DERIVED FROM Garry Tan's gstack (see the module note above) —
     # one paxel subagent per axis read the real gstack role/skill definitions and
@@ -1053,6 +1112,8 @@ def compute_scores(stats):
     sess = max(v["total_sessions"], 1)
     prompts = max(v["total_prompts"], 1)
     hours = max(vel["active_hours"], 0.1)
+    ev = _evidence(stats)   # 0..1 confidence; gates the inverse terms so a thin corpus
+                            # can't read as flawless (no-op at ev=1.0 for any real user).
 
     # EXECUTION — gstack's BUILD phase + the "Golden Age" ethos: shipped output at
     # AI leverage. The throughput signal is gold-standard git churn (what actually
@@ -1090,9 +1151,13 @@ def compute_scores(stats):
     # error_recovery_ratio (saturates ~1.0 for everyone → no signal).
     steer_skills = _skill_uses_any(stats, ("review", "careful", "investigate",
                                            "office-hours", "code-review"))
+    # The first two are INVERSE terms (high when a metric is low) — wrapped in _ev so an
+    # inactive corpus, where actions/prompt and p90 are 0, doesn't read as "maximally
+    # hands-on." The question-rate and skill terms are presence-based (0 = didn't do it),
+    # so they need no gating.
     steering = 10 * (
-        0.38 * _clamp((15 - b["actions_per_prompt"]) / 11)               # hands-on cadence: fewer actions/prompt = more in the loop
-        + 0.32 * _clamp((10 - b["iteration_depth_p90"]) / 8)             # break-in: lower p90 = redirects sooner
+        0.38 * _ev(_clamp((15 - b["actions_per_prompt"]) / 11), ev)      # hands-on cadence: fewer actions/prompt = more in the loop
+        + 0.32 * _ev(_clamp((10 - b["iteration_depth_p90"]) / 8), ev)    # break-in: lower p90 = redirects sooner
         + 0.22 * _clamp((b["questions_asked"] / prompts) / 0.05)         # interrogation rate (per prompt, not raw count)
         + 0.08 * _clamp(steer_skills / max(sess * 0.5, 1)))             # staying in the verification loop
 
@@ -1105,12 +1170,15 @@ def compute_scores(stats):
     churn_back = vel["git_deletions"] / max(vel["git_insertions"], 1)
     eng_skills = _skill_uses_any(stats, ("review", "test", "tdd", "qa", "investigate",
                                          "retro", "learn", "cso", "karpathy", "debug"))
+    # The rework / iteration / thrash / error terms are all INVERSE (high when the bad
+    # metric is low) — wrapped in _ev so a near-empty corpus, where churn/p90/hammering/
+    # errors are all 0, doesn't read as flawless craft. The ceremony term is presence-based.
     engineering = 10 * (
-        0.28 * (1 - _clamp((churn_back - 0.20) / 0.40))                  # low rework: some deletion healthy, lots = thrash
-        + 0.22 * (1 - _clamp((b["iteration_depth_p90"] - 3) / 9))        # clean iteration: low typical depth = lands right
-        + 0.18 * (1 - _clamp((b["files_hammered_over_15x"] / sess) / 0.25))  # focused: few hammered files
+        0.28 * _ev(1 - _clamp((churn_back - 0.20) / 0.40), ev)          # low rework: some deletion healthy, lots = thrash
+        + 0.22 * _ev(1 - _clamp((b["iteration_depth_p90"] - 3) / 9), ev)  # clean iteration: low typical depth = lands right
+        + 0.18 * _ev(1 - _clamp((b["files_hammered_over_15x"] / sess) / 0.25), ev)  # focused: few hammered files
         + 0.22 * _clamp((eng_skills / sess) / 3.0)                       # Boil-the-Lake ceremonies: review/qa/investigate/retro
-        + 0.10 * (1 - _clamp(b["error_rate_per_100_tools"] / 10)))       # low error rate: root-cause discipline
+        + 0.10 * _ev(1 - _clamp(b["error_rate_per_100_tools"] / 10), ev))  # low error rate: root-cause discipline
 
     # PRODUCT INSTINCT — gstack's CEO / office-hours layer: do you rethink the PRODUCT
     # before building it (reframe the request, challenge premises, find the 10-star
@@ -1363,7 +1431,7 @@ _PROFILE_CSS = """<style>
   .card code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:#eef1f3;color:var(--beak-deep);padding:1px 5px;border-radius:4px}
   .disclaimer{background:#fff;border:1px solid var(--line);border-left:4px solid var(--beak);border-radius:6px;padding:14px 16px;margin:-6px 0 24px;font-size:13.5px;color:#48535b;line-height:1.55} .disclaimer b{color:var(--text)}
   .score{display:grid;grid-template-columns:160px 1fr 46px;align-items:center;gap:14px;margin:0 0 14px} .score .name{font-weight:600;font-size:15px}
-  .score .track{height:12px;background:#dde2e6;border-radius:999px;overflow:hidden} .score .fill{height:100%;background:linear-gradient(90deg,var(--beak-deep),var(--beak));border-radius:999px}
+  .score .track{display:block;height:12px;background:#dde2e6;border-radius:999px;overflow:hidden} .score .fill{display:block;height:100%;min-width:8px;background:linear-gradient(90deg,var(--beak-deep),var(--beak));border-radius:999px}
   .score .val{font-weight:800;text-align:right} .score .note{grid-column:1/-1;color:var(--muted);font-size:13px;margin:-6px 0 4px;padding-left:174px}
   @media(max-width:560px){.score .note{padding-left:0}}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:14px}
@@ -1403,6 +1471,7 @@ def write_profile_html(stats, archetype, quote, scores):
     top_tool = (t["top_tools"][0] if t["top_tools"] else ["—", 0])
     top_tool_name = _h.escape(str(top_tool[0]))
     sess = max(v["total_sessions"], 1)
+    prompts = max(v["total_prompts"], 1)
     per_sess = round(b["delegate_actions"] / sess, 1)
     git_pct = f'{vel["git_repos_with_commits"]}/{vel["git_repos_seen"]}'
 
@@ -1420,6 +1489,21 @@ def write_profile_html(stats, archetype, quote, scores):
     prompt_d = (f'Half run under {v["median_prompt_length_chars"]:,.0f} characters — quick commands — '
                 f'but the average is {v["avg_prompt_length_chars"]:,.0f}.' if two_gears else
                 f'Median {v["median_prompt_length_chars"]:,.0f} characters, average {v["avg_prompt_length_chars"]:,.0f} — pretty steady.')
+    polite_n = b.get("polite_prompts", 0)
+    polite_rate = polite_n / prompts
+    polite_a = ("You say thanks a lot" if polite_rate >= 0.12 else
+                "Polite enough" if polite_rate >= 0.04 else "All business")
+    polite_d = (f'You said please or thank-you in <b>{polite_n:,}</b> of your {v["total_prompts"]:,} prompts '
+                f'({polite_rate*100:.0f}%).' + (" When the robots take over, they'll remember."
+                                                if polite_rate >= 0.12 else ""))
+    lr = b.get("longest_run_minutes", 0)
+    lr_h, lr_m = int(lr // 60), int(lr % 60)
+    longrun_a = f'{lr_h}h {lr_m}m' if lr_h else f'{lr_m}m'
+    qrate_c = b["questions_asked"] / prompts
+    teammate = polite_rate >= 0.05 or qrate_c >= 0.04
+    agent_a = "Like a teammate" if teammate else "Like a tool"
+    agent_d = ('You bounce ideas off it and ask for pushback — more collaborator than command line.'
+               if teammate else 'You hand it work and check the result — more command line than collaborator.')
     # "What we noticed" — question-framed eyebrows + plain second-person copy (no jargon).
     cards = [
         _card("How much did you ship?", "Depends how you count",
@@ -1437,6 +1521,10 @@ def write_profile_html(stats, archetype, quote, scores):
         _card("How long are your prompts?", prompt_a, prompt_d),
         _card("How many agents do you run?", f'{b["delegate_actions"]:,} subagents',
               f'About {per_sess} per session, plus {b["background_tasks"]:,} background tasks and {b["scheduled_actions"]} scheduled runs.'),
+        _card("How do you see your agent?", agent_a, agent_d),
+        _card("How polite are you to it?", polite_a, polite_d),
+        _card("What's your longest run?", longrun_a,
+              'Your longest unbroken stretch of active work in a single session.'),
         _card("What's your go-to tool?", top_tool_name, f'{top_tool[1]:,} calls — more than any other tool.'),
     ]
 
@@ -1509,6 +1597,10 @@ def write_profile_html(stats, archetype, quote, scores):
       'reproducible, not guessed. The <b>0–10 scores are an opinion</b>: a transparent rubric grounded in '
       '<a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">Garry Tan\'s gstack</a>, '
       'not a copy of Paxel\'s closed algorithm. Short version: <b>numbers = fact, scores = opinion.</b></div>')
+    if _evidence(stats) < 0.5:   # < ~100 tool calls: too thin to read habits confidently
+        P(f'<div class="disclaimer" style="border-left-color:var(--muted)">⚠ <b>Limited data.</b> '
+          f'Just {v["total_sessions"]} sessions and {v["tool_calls_total"]:,} tool calls here — not enough to read '
+          f'your habits with confidence, so these scores lean toward the middle. Run more and check back.</div>')
     P(score_rows)
     if moves:
         P('<h2 class="section">Your signature moves</h2>')
