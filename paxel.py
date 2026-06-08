@@ -433,6 +433,25 @@ def _caps_ratio(text):
     return (sum(1 for c in letters if c.isupper()) / len(letters)) if letters else 0.0
 
 
+# A prompt can be surfaced verbatim only if it's actually the user's words — not a harness
+# marker, and not carrying a secret. We NEVER alter a shown prompt (Max: zero redaction); we
+# just refuse to SELECT one that's a credential or a system artifact rather than a real prompt.
+_SECRET_RE = re.compile(r'eyJ[A-Za-z0-9_\-]{20,}|sk-[A-Za-z0-9]{16,}|gh[posru]_[A-Za-z0-9]{16,}|'
+                        r'AKIA[0-9A-Z]{12,}|Bearer\s+\S{16,}|[A-Fa-f0-9]{32,}|[A-Za-z0-9_\-]{36,}', re.I)
+_SYS_MARKER_RE = re.compile(r'\[request interrupted|\[tool|<system|<command|<local-command|'
+                            r'this block is not|tool_use|caveat:', re.I)
+
+
+def _safe_quote(text):
+    if not text or len(text) > 140:
+        return False
+    if _SYS_MARKER_RE.search(text) or _SECRET_RE.search(text):
+        return False
+    if any(len(tok) > 32 for tok in text.split()):   # a giant unbroken token = key/url/hash, not a word
+        return False
+    return True
+
+
 def _open_in_browser(path):
     """Best-effort: pop the finished profile in the default browser. Silent if it can't
     (headless / SSH / CI) — we just fall back to printing the path. Pass --no-open to skip."""
@@ -476,6 +495,13 @@ def main():
     prompts_count = 0
     polite_prompts = 0         # prompts that say please / thanks / etc.
     prompt_lengths = []        # chars of genuine typed prompts
+    # "In your own words" cards — pulled VERBATIM from real prompts (local page only,
+    # never the shared image). go-to phrase / most cryptic / biggest crash-out.
+    phrase_counts = Counter()      # normalized short prompt -> times seen
+    phrase_repr = {}               # normalized -> first original spelling
+    phrase_sess = defaultdict(set) # normalized -> session ids it appeared in
+    cryptic_best = (0, "")         # (score, verbatim text)
+    crashout_best = (0.0, "")      # (score, verbatim text)
     command_invocations = 0
 
     assistant_turns = 0
@@ -600,6 +626,28 @@ def main():
                                 prompt_lengths.append(len(cleaned))
                                 if _POLITE_RE.search(cleaned):
                                     polite_prompts += 1
+                                # collect verbatim-quote candidates (short prompts only, and
+                                # only if safe to surface — no secrets / no harness markers)
+                                _wc = len(cleaned.split())
+                                if _safe_quote(cleaned) and 1 <= _wc <= 6:
+                                    _norm = re.sub(r"\s+", " ", cleaned.strip().lower()).strip("?.!,. ")
+                                    if len(_norm) >= 2:
+                                        phrase_counts[_norm] += 1
+                                        phrase_repr.setdefault(_norm, cleaned.strip())
+                                        phrase_sess[_norm].add(sid)
+                                if _safe_quote(cleaned) and 2 <= _wc <= 12:
+                                    _typ = _typo_score(cleaned)
+                                    if _typ >= 1:
+                                        _csc = _typ + (1 if _wc <= 5 else 0)
+                                        if _csc > cryptic_best[0]:
+                                            cryptic_best = (_csc, cleaned.strip())
+                                if _safe_quote(cleaned) and sum(c.isalpha() for c in cleaned) >= 8:
+                                    _cr = _caps_ratio(cleaned)
+                                    _capsword = bool(re.search(r"\b[A-Z]{4,}\b", cleaned))
+                                    if _cr >= 0.5 or _capsword or "!!" in cleaned:
+                                        _xsc = _cr + (0.4 if _capsword else 0) + (0.3 if "!!" in cleaned else 0)
+                                        if _xsc > crashout_best[0]:
+                                            crashout_best = (_xsc, cleaned.strip())
                                 if is_command:
                                     command_invocations += 1
                                 proj = os.path.basename(cwd) if cwd else "?"
@@ -911,7 +959,15 @@ def main():
     write_narrative_input(stats, opening_prompts, longest_prompts)
     scores = compute_scores(stats)
     archetype, quote = pick_archetype(stats, scores)
-    write_profile_html(stats, archetype, quote, scores)
+    # "In your own words" — pick the go-to phrase (most-repeated short prompt seen in >=2
+    # sessions), most cryptic, biggest crash-out. VERBATIM, never stored in stats.json.
+    goto = None
+    for ph, cnt in phrase_counts.most_common(25):
+        if cnt >= 3 and len(phrase_sess.get(ph, ())) >= 2:
+            goto = (phrase_repr[ph], cnt, len(phrase_sess[ph]))
+            break
+    voice = {"goto": goto, "cryptic": cryptic_best[1] or None, "crashout": crashout_best[1] or None}
+    write_profile_html(stats, archetype, quote, scores, voice)
     print("\nWrote stats.json, report.md, narrative_input.md, profile.html to", OUT_DIR)
     if "--no-open" not in sys.argv:
         _open_in_browser(os.path.join(OUT_DIR, "profile.html"))
@@ -1452,7 +1508,7 @@ def _card(q, a, d, flag=False):
     return f'<div class="{cls}"><p class="q">{q}</p><p class="a">{a}</p><p class="d">{d}</p></div>'
 
 
-def write_profile_html(stats, archetype, quote, scores):
+def write_profile_html(stats, archetype, quote, scores, voice=None):
     import html as _h
     v, vel, b, r, t, st, c = (stats["volume"], stats["velocity"], stats["behavior"],
                               stats["rhythm"], stats["tools"], stats["stack"], stats["corpus"])
@@ -1619,6 +1675,28 @@ def write_profile_html(stats, archetype, quote, scores):
     P('<h2 class="section">What we noticed</h2><div class="grid">')
     P("".join(cards))
     P('</div>')
+
+    # "In your own words" — VERBATIM prompt quotes. Local page ONLY (gitignored, your data,
+    # your machine); deliberately NOT in card_data, so they never reach the shareable image.
+    # Escape every quote (raw user text → XSS). Only render the cards that actually exist.
+    voice = voice or {}
+    vcards = []
+    if voice.get("goto"):
+        ph, cnt, ns = voice["goto"]
+        vcards.append(_card("What's your go-to prompt?", f'&ldquo;{_h.escape(ph)}&rdquo;',
+              f'Your most-repeated prompt — <b>{cnt:,}</b> times across {ns} sessions.'))
+    if voice.get("cryptic"):
+        vcards.append(_card("Your most cryptic prompt?", f'&ldquo;{_h.escape(voice["cryptic"])}&rdquo;',
+              'Short, low-context, a little garbled — and the agent ran with it anyway.'))
+    if voice.get("crashout"):
+        vcards.append(_card("Your biggest crash-out?", f'&ldquo;{_h.escape(voice["crashout"])}&rdquo;',
+              'Your most heated prompt. We&rsquo;ve all been there.'))
+    if vcards:
+        P('<h2 class="section">In your own words</h2>')
+        P('<p class="lead">Pulled <b>verbatim</b> from your real prompts. These live only on this local '
+          'page — your words, on your machine — and we keep them out of the downloadable image on purpose.</p>')
+        P(f'<div class="grid">{"".join(vcards)}</div>')
+
     P('<footer><span class="lock">🔒 Generated entirely on-device</span> by <span class="mono">paxel.py</span> — '
       'the same analysis Paxel runs, with zero data sent anywhere. Counts measured from your transcripts; '
       'archetype &amp; scores are a rubric. Raw metrics in <span class="mono">stats.json</span>.<br>'
