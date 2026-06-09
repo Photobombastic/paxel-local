@@ -1821,19 +1821,6 @@ def _img_data_uri(path):
         return ""
 
 
-# Embedded tern logo so a SINGLE downloaded paxel.py is self-contained — the poster keeps its
-# branding without a companion tern.png. Empty in the repo (clone users have tern.png on disk, which
-# takes precedence); filled only in the release-asset build (scripts/build_release.py). Keeps the
-# committed source clean while making the downloadable one-file build truly standalone.
-_TERN_B64 = ""
-
-
-def _logo_uri():
-    """tern.png on disk wins (clone/repo users); else the embedded logo (single-file download)."""
-    return _img_data_uri(os.path.join(OUT_DIR, "tern.png")) or \
-        (("data:image/png;base64," + _TERN_B64) if _TERN_B64 else "")
-
-
 _PROFILE_CSS = """<style>
   :root{--slate:#313941;--beak:#ED7379;--beak-deep:#D14E57;--bg:#eef1f3;--panel:#fff;
     --line:#d9dee2;--text:#16191d;--muted:#5e6a73;
@@ -1914,7 +1901,7 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     import html as _h
     v, vel, b, r, t, st, c = (stats["volume"], stats["velocity"], stats["behavior"],
                               stats["rhythm"], stats["tools"], stats["stack"], stats["corpus"])
-    logo = _logo_uri()
+    logo = _img_data_uri(os.path.join(OUT_DIR, "tern.png"))
     chip = f'<span class="chip"><img src="{logo}" alt="Roadmap tern"></span>' if logo else ""
 
     peak = (r["peak_hours_local"] or [12])[0]
