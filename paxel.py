@@ -1258,6 +1258,16 @@ def _mon_yr(iso):
     return (iso[:10] or "—")
 
 
+def _js(obj):
+    """json.dumps for embedding INSIDE a <script> tag. Python's json.dumps does not escape
+    '<', '>', '&', so a prompt containing '</script>' (a real web-dev question) would close
+    the script element early and break the whole page. Escape them to \\uXXXX (still valid
+    JSON/JS), plus the U+2028/U+2029 line separators that break JS string literals."""
+    return (json.dumps(obj)
+            .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+            .replace(" ", "\\u2028").replace(" ", "\\u2029"))
+
+
 def _skill_uses(stats, needle):
     return sum(n for k, n in stats["stack"].get("top_skills", []) if needle in k.lower())
 
@@ -1766,7 +1776,7 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
         _first_stat = [f'{v["thinking_blocks"]:,}', "reasoning blocks"]
     else:
         _first_stat = [f'{vel["tool_churn_edit_write"]:,}', "lines edited"]
-    card_data = json.dumps({
+    card_data = _js({
         "arch": archetype,
         "tagline": _tag,
         "context": _context,
@@ -1885,12 +1895,12 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
       '<a href="https://www.roadmap.chat/community" target="_blank" rel="noopener">Roadmap</a></footer>')
     P('</div></div>')
     P("<script>(function(){")
-    P('var QUOTES=' + json.dumps(quote_js) + ';var QIDX={};')
+    P('var QUOTES=' + _js(quote_js) + ';var QIDX={};')
     P('document.querySelectorAll(".reroll").forEach(function(b){b.addEventListener("click",function(){'
       'var t=b.getAttribute("data-target"),arr=QUOTES[t];if(!arr||arr.length<2)return;'
       'QIDX[t]=((QIDX[t]||0)+1)%arr.length;var el=document.getElementById("q-"+t);'
       'if(el)el.textContent="\\u201c"+arr[QIDX[t]]+"\\u201d";});});')
-    P(f'var repo={json.dumps(REPO_URL)};var caption={json.dumps(caption)};')
+    P(f'var repo={_js(REPO_URL)};var caption={_js(caption)};')
     P('var x=document.getElementById("share-x");if(x)x.href="https://x.com/intent/tweet?text="+encodeURIComponent(caption);')
     P('var cb=document.getElementById("share-copy");if(cb)cb.addEventListener("click",function(){'
       'var d=function(){var o=cb.textContent;cb.textContent="✓ Copied";setTimeout(function(){cb.textContent=o;},1500);};'
@@ -1933,8 +1943,9 @@ if(ib)ib.addEventListener("click",function(){
     // layout — tightened top gap; height grows with the card count
     var mc=document.createElement("canvas").getContext("2d");
     var afs=88;mc.font="800 "+afs+"px Georgia,serif";while(mc.measureText(CARD.arch+".").width>IW&&afs>48){afs-=2;mc.font="800 "+afs+"px Georgia,serif";}
-    var heroY=96,archB=heroY+12+Math.round(afs*0.74),tagY=archB+40,ctxY=tagY+30,scY=ctxY+42,scH=348,scEnd=scY+scH;
-    var gridY=scEnd+30,gc=4,rows=Math.ceil(cards.length/gc),cardH=176,gapY=22;
+    mc.font="italic 27px Georgia,serif";var tll=L(mc,CARD.tagline,IW);if(tll.length>2){tll=tll.slice(0,2);tll[1]=tll[1].replace(/[\s—-]+$/,"")+"…";}   // tagline can wrap to 2 lines
+    var heroY=96,archB=heroY+12+Math.round(afs*0.74),tagY=archB+40,tagLH=33,ctxY=tagY+(tll.length-1)*tagLH+30,scY=ctxY+42,scH=348,scEnd=scY+scH;
+    var gridY=scEnd+30,gc=4,rows=Math.ceil(cards.length/gc),cardH=184,gapY=22;
     var gridEnd=rows>0?gridY+rows*cardH+(rows-1)*gapY:scEnd,footerY=gridEnd+44,H=footerY+34;
     var cv=document.createElement("canvas");cv.width=W*s;cv.height=H*s;
     var c=cv.getContext("2d");c.scale(s,s);c.textBaseline="alphabetic";c.textAlign="left";
@@ -1948,7 +1959,7 @@ if(ib)ib.addEventListener("click",function(){
     c.fillStyle=mut;c.fillText(bt,btx,61);
     c.fillStyle=beakD;c.font="700 13px -apple-system,sans-serif";if(c.letterSpacing!==undefined)c.letterSpacing="2px";c.fillText("YOUR BUILDER PROFILE",M,heroY);if(c.letterSpacing!==undefined)c.letterSpacing="0px";
     c.font="800 "+afs+"px Georgia,serif";c.fillStyle=beak;c.fillText(CARD.arch+".",M,archB);
-    c.fillStyle="#3b444b";c.font="italic 27px Georgia,serif";c.fillText(L(c,CARD.tagline,IW)[0],M,tagY);
+    c.fillStyle="#3b444b";c.font="italic 27px Georgia,serif";for(var ti=0;ti<tll.length;ti++)c.fillText(tll[ti],M,tagY+ti*tagLH);
     if(CARD.context){c.fillStyle=mut;c.font="500 15px -apple-system,sans-serif";c.fillText(CARD.context,M,ctxY);}
     box(c,M,scY,IW,scH);
     var pad=40,ix=M+pad,half=IW/2;
