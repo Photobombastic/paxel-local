@@ -33,6 +33,7 @@ SRC_DIRS = dict(
     GEMINI_DIR=os.path.join(FIX, "gemini"),
     PI_DIR=os.path.join(FIX, "pi"),
     OPENCODE_DIR=os.path.join(FIX, "opencode"),
+    CURSOR_DB=os.path.join(FIX, "__no_cursor__"),   # nonexistent → note_experimental() stays quiet
 )
 EXPECTED_SOURCES = {"claude", "codex", "gemini", "pi", "opencode"}
 SCORED_AXES = {"Execution", "Planning", "Engineering"}
@@ -75,8 +76,9 @@ class TestPipeline(unittest.TestCase):
         # stats.json must be valid JSON
         with open(os.path.join(out, "stats.json"), encoding="utf-8") as fh:
             json.load(fh)
-        # the run reported real activity (fixtures aren't empty)
-        self.assertRegex(out_text, r"sessions=\d+")
+        # the run reported real activity — sessions must be NON-ZERO, so a silent parser
+        # regression (discovery works but parsing yields nothing) fails instead of false-greening
+        self.assertRegex(out_text, r"sessions=[1-9]\d*")
 
     def test_each_source_runs_in_isolation(self):
         # A broken single parser should be pinpointed, not hidden behind the others.
@@ -98,7 +100,9 @@ class TestPipeline(unittest.TestCase):
         # the article fix: no archetype should read "You're a The Architect"
         self.assertNotIn("You're a The ", html)
         # the poster's embedded CARD payload must be valid JSON (guards the _js() escaper)
-        card_line = next(ln for ln in html.splitlines() if ln.strip().startswith("var CARD="))
+        card_line = next((ln for ln in html.splitlines()
+                          if ln.strip().startswith("var CARD=")), None)
+        self.assertIsNotNone(card_line, "var CARD= line not found in profile.html")
         card_json = card_line.strip()[len("var CARD="):].rstrip(";")
         card = json.loads(card_json)
         self.assertEqual({s[0] for s in card["scores"]}, SCORED_AXES)
@@ -127,6 +131,7 @@ class TestUnits(unittest.TestCase):
         self.assertEqual(paxel._hero_lead("Velocity Machine"), "You're a")
         self.assertEqual(paxel._hero_lead("Brute-Force Architect"), "You're a")
         self.assertEqual(paxel._hero_lead(""), "You're a")
+        self.assertEqual(paxel._hero_lead(None), "You're a")   # the None-guard is the refactor's whole point
 
     def test_crashout_witching_hour(self):
         t = "why is this still broken"
