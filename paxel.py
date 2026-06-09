@@ -736,6 +736,8 @@ def main():
                                         # punctuation) — caps alone is excitement, not a crash-out
                                         if _RAGE_RE.search(cleaned) or _bangs >= 2:
                                             _xsc = _crashout_score(cleaned, hour=dt.hour if dt else None)
+                                            # daytime gate; at 2–6am the witching bonus (+1.8) in
+                                            # _crashout_score lowers the effective bar (intended)
                                             if _xsc >= 2.0:
                                                 crashout_cands.append((round(_xsc, 2), cleaned.strip()))
                                 if is_command:
@@ -1222,7 +1224,7 @@ def write_narrative_input(s, opening_prompts, longest_prompts):
 # profile.html. The COUNTS are measured; the scores/archetype are a rubric and
 # the report says so. narrative_input.md is still written for optional LLM polish.
 #
-# The four score axes are NOT an arbitrary rubric — each one is grounded in
+# The three score axes are NOT an arbitrary rubric — each one is grounded in
 # Garry Tan's open-source gstack (github.com/garrytan/gstack), the same
 # Garry-Tan-world framework YC's Paxel comes out of. gstack frames building as a
 # sprint — Think → Plan → Build → Review → Test → Ship → Reflect — on top of
@@ -1235,10 +1237,13 @@ def write_narrative_input(s, opening_prompts, longest_prompts):
 # The rubric was then AUDITED by running the real installed gstack skills
 # (/plan-eng-review, /plan-ceo-review, /review) via independent subagents. That
 # audit drove the current design: each metric is owned by EXACTLY ONE axis (so no
-# two axes silently move together), Execution/Steering no longer anti-correlate,
-# and a 5th "Product Instinct" axis was CUT — the audit showed it was mostly
-# skill-detection plus terms recycled from other axes, i.e. it didn't honestly
-# measure product judgment. Coding transcripts don't reveal that, so we don't fake it.
+# two axes silently move together), and a 5th "Product Instinct" axis was CUT — the
+# audit showed it was mostly skill-detection plus terms recycled from other axes, i.e.
+# it didn't honestly measure product judgment. Coding transcripts don't reveal that, so
+# we don't fake it. A later validity pass then DEMOTED a 4th axis, Steering, from a
+# scored 0–10 to a described reading (see steering_reading): hands-on cadence is real
+# but has no good/bad end, and grading it `(15 - actions_per_prompt)` ran backwards
+# (a more autonomous engineer scored lower). So: 3 graded axes + 1 described.
 # ---------------------------------------------------------------------------
 REPO_URL = "https://github.com/Photobombastic/paxel-local"
 
@@ -1326,13 +1331,14 @@ def _ev(credit, ev):
 
 
 def compute_scores(stats):
-    # FOUR axes, grounded in gstack (module note above) and then hardened by a gstack
-    # self-audit. Design rules the audit enforced:
-    #   1. Each metric is owned by EXACTLY ONE axis — no metric drives two axes, so the
-    #      axes are genuinely independent (no hidden correlation).
-    #   2. actions_per_prompt lives ONLY in Steering (hands-on cadence); Execution no
-    #      longer rewards it, so the two axes don't anti-correlate by construction.
-    #   3. iteration_depth_p90 lives ONLY in Engineering; questions_asked ONLY in Steering.
+    # THREE graded axes (Execution/Planning/Engineering), grounded in gstack (module note
+    # above) and then hardened by a gstack self-audit. Steering is NOT scored here — it's
+    # described in steering_reading (it was inverted; see that function). Design rules:
+    #   1. Each metric is owned by EXACTLY ONE place — no metric drives two graded axes, so
+    #      the axes are genuinely independent (no hidden correlation).
+    #   2. actions_per_prompt and questions_asked live ONLY in steering_reading (hands-on
+    #      cadence — described, not scored); neither graded axis rewards them.
+    #   3. iteration_depth_p90 lives ONLY in Engineering.
     #   4. Skill-detection terms are kept but de-weighted (a builder who plans in Notion
     #      and reviews on GitHub shouldn't score 0) — behavior carries the axes.
     # Weights sum to 1.0 per axis; every term is clamped 0..1 against a justified target;
@@ -1353,8 +1359,9 @@ def compute_scores(stats):
     #       report discloses it). (b) FIDELITY: how much of what you GENERATED actually got
     #       committed — git churn vs tool churn — the audit's headline "are you shipping or
     #       just exploring" signal (also coverage-corrected). (c) DELEGATION/parallelism.
-    #   Dropped vs the old version: actions_per_prompt (moved to Steering) and raw session
-    #   length (the audit called it noise — a long distracted session isn't execution).
+    #   Dropped vs the old version: actions_per_prompt (now in steering_reading, described
+    #   not scored) and raw session length (the audit called it noise — a long distracted
+    #   session isn't execution).
     git_cov = max(vel["git_repos_with_commits"] / max(vel["git_repos_seen"], 1), 0.7)
     eff_git_churn = vel["git_churn_total"] / git_cov
     fidelity = eff_git_churn / max(vel["tool_churn_edit_write"], 1)
@@ -1848,7 +1855,7 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
         "tagline": _tag,
         "context": _context,
         "scores": [[k, val, SCORE_NOTES_SHORT.get(k, "")] for k, val in scores.items()],
-        "steering": {"label": steer_read["label"], "detail": steer_read["gloss"]},
+        "steering": {"label": steer_read["label"], "gloss": steer_read["gloss"]},  # poster uses the short gloss; the longer detail is page-only
         "stats": [_first_stat,
                   [f'{v["total_prompts"]:,}', "prompts"],
                   [f'{v["tool_calls_total"]:,}', "tool calls"],
@@ -2048,7 +2055,7 @@ if(ib)ib.addEventListener("click",function(){
     if(CARD.steering){var sry=base+sc.length*rh;                       // Steering: described, not graded — no bar, no number
       c.fillStyle=slate;c.font="700 16px -apple-system,sans-serif";c.fillText("Steering",ix,sry);
       c.fillStyle=beakD;c.font="700 15px -apple-system,sans-serif";c.fillText(CARD.steering.label,barL,sry);
-      c.fillStyle=mut;c.font="400 13px -apple-system,sans-serif";c.fillText(CARD.steering.detail,ix,sry+22);}
+      c.fillStyle=mut;c.font="400 13px -apple-system,sans-serif";c.fillText(CARD.steering.gloss,ix,sry+22);}
     var dvx=M+half+4;c.strokeStyle=line;c.lineWidth=1;c.beginPath();c.moveTo(dvx,scY+38);c.lineTo(dvx,scY+scH-34);c.stroke();
     var stt=CARD.stats||[];for(var j=0;j<stt.length&&j<sc.length+1;j++){var syy=base+j*rh;
       c.fillStyle=slate;c.font="800 30px ui-monospace,Menlo,monospace";c.fillText(stt[j][0],stx,syy);var w2=c.measureText(stt[j][0]).width;
