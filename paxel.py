@@ -1885,6 +1885,14 @@ def _card(q, a, d, flag=False):
     return f'<div class="{cls}"><p class="q">{q}</p><p class="a">{a}</p><p class="d">{d}</p></div>'
 
 
+def _hero_lead(archetype):
+    """The HTML hero says "You're a {archetype}" — but the "The …" archetypes (The Architect/
+    Director/Builder/Bulldozer) would read "You're a The Architect". Drop the article for those.
+    The archetype string itself is never altered, so the poster keeps its "The Architect." title.
+    (No archetype starts with a vowel, so "a" is always right for the rest.)"""
+    return "You're" if (archetype or "")[:4].lower() == "the " else "You're a"
+
+
 def write_profile_html(stats, archetype, quote, scores, voice=None):
     import html as _h
     v, vel, b, r, t, st, c = (stats["volume"], stats["velocity"], stats["behavior"],
@@ -2064,12 +2072,7 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
       '<span class="badge">🔒 Generated locally · nothing uploaded</span></div></div>')
     P('<div class="wrap"><section class="hero">')
     P(f'<p class="eyebrow">{eyebrow}</p>')
-    # Archetypes that already start with "The" (The Architect/Director/Builder/Bulldozer) would
-    # read "You're a The Architect" — drop the article for those. The archetype string itself is
-    # left untouched (the poster keeps its "The Architect."). No archetype starts with a vowel, so
-    # "a" is always right for the rest.
-    _lead = "You're" if archetype[:4].lower() == "the " else "You're a"
-    P(f'<h1>{_lead}<br><span class="accent">{_h.escape(archetype)}.</span></h1>')
+    P(f'<h1>{_hero_lead(archetype)}<br><span class="accent">{_h.escape(archetype)}.</span></h1>')
     P(f'<p class="quote">“{_h.escape(quote)}”</p>')
     P(f'<p class="sub"><b>{v["thinking_blocks"]:,} reasoning blocks</b> before the diffs, '
       f'<b>{b["delegate_actions"]:,} subagents</b> dispatched, and <b>{b["tool_errors"]:,} errors</b> recovered from along the way.</p>')

@@ -1,0 +1,15 @@
+{
+  "sessionId": "gemini-demo-1",
+  "messages": [
+    {"type": "user", "timestamp": "2026-06-03T09:00:00Z", "content": "explain this function then add a benchmark"},
+    {"role": "model", "timestamp": "2026-06-03T09:00:03Z", "content": [
+      {"text": "It hashes the key, then runs the benchmark."},
+      {"functionCall": {"name": "run_shell_command", "args": {"command": "npm test"}}}
+    ]},
+    {"type": "user", "timestamp": "2026-06-03T09:01:00Z", "content": "great, now commit it"},
+    {"role": "model", "timestamp": "2026-06-03T09:01:04Z", "content": [
+      {"text": "Committing the benchmark."},
+      {"functionCall": {"name": "run_shell_command", "args": {"command": "git commit -am bench"}}}
+    ]}
+  ]
+}
