@@ -462,9 +462,9 @@ def _crashout_score(text):
     return caps * 2.5 + brevity + allcaps * 0.4 + rage * 0.5 + bangs * 0.3
 
 
-_FEELS_RE = re.compile(r'\b(worried|scared|nervous|anxious|stressed|tired|exhausted|confused|'
-                       r'lost|sorry|stupid|dumb|idiot|hopeless|unemploy\w*|crying|cry|sad|'
-                       r'overwhelmed|panic\w*|dying|help me|please work)\b', re.I)
+_FEELS_RE = re.compile(r'\b(worried|scared|nervous|anxious|stressed|exhausted|confused|'
+                       r'stupid|dumb|idiot|hopeless|unemploy\w*|crying|sobbing|sad|miserable|'
+                       r'overwhelmed|panic\w*|dying|losing my mind|cant anymore|please work)\b', re.I)
 _EMOTICON_RE = re.compile(r"[:;=]['\-^]?[\(\)\[\]\/\\|dpox3<>]", re.I)
 # Content-free affirmations/fillers — an "off the cuff" card needs more than "yep :)".
 _FILLER = {"ok", "okay", "yes", "yep", "yup", "yeah", "ya", "sure", "nice", "great", "cool",
@@ -1037,10 +1037,16 @@ def main():
         return sorted(best.values(), key=lambda x: (-x[0], x[1]))   # tie-break on text → reproducible
     cryptic_cands = _dedup_rank(cryptic_cands)
     crashout_cands = _dedup_rank(crashout_cands)
-    # both crash-out and off-the-cuff are MONTAGES of the top short ones (funnier stacked)
-    short_rage = [tx for sc, tx in crashout_cands if len(tx.split()) <= 7][:3]
-    off_cuff = [tx for sc, tx in cryptic_cands][:3]
-    voice = {"goto": goto, "crashouts": short_rage, "cryptics": off_cuff}
+    # Each card shows the SINGLE best quote; a ↻ button rerolls through this small pool
+    # (top few within striking distance of #1 — quality only, no weak tail).
+    def _quote_pool(cands, n=6, floor=0.5):
+        if not cands:
+            return []
+        top = cands[0][0]
+        return [tx for sc, tx in cands if sc >= top * floor][:n]
+    rage_pool = _quote_pool([(sc, tx) for sc, tx in crashout_cands if len(tx.split()) <= 9])
+    cuff_pool = _quote_pool(cryptic_cands)
+    voice = {"goto": goto, "crashouts": rage_pool, "cryptics": cuff_pool}
     write_profile_html(stats, archetype, quote, scores, voice)
     print("\nWrote stats.json, report.md, narrative_input.md, profile.html to", OUT_DIR)
     if "--no-open" not in sys.argv:
@@ -1569,6 +1575,8 @@ _PROFILE_CSS = """<style>
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:14px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px 18px 16px;box-shadow:0 1px 2px rgba(20,30,40,.04)} .card.flag{border-left:4px solid var(--beak)}
   .card .q{color:var(--beak-deep);font-size:12.5px;font-weight:700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.03em}
+  .card .reroll{font-family:var(--sans);text-transform:none;letter-spacing:0;font-size:11px;font-weight:600;color:var(--beak-deep);background:none;border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:8px;cursor:pointer;vertical-align:middle}
+  .card .reroll:hover{background:#fff;border-color:var(--beak)}
   .card .a{font-family:var(--serif);font-size:19px;font-weight:700;margin:0 0 6px} .card .d{color:var(--muted);font-size:13.5px;margin:0}
   footer{margin-top:54px;padding-top:22px;border-top:1px solid var(--line);color:var(--muted);font-size:13px;line-height:1.7} footer .lock{color:var(--beak-deep);font-weight:700} footer .by{color:var(--text)}
 </style>"""
@@ -1755,27 +1763,30 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     # Escape every quote (raw user text → XSS). Only render the cards that actually exist.
     voice = voice or {}
     vcards = []
+    quote_js = {}   # target -> [raw quotes] for the ↻ reroll button (cycles the pool client-side)
 
-    def _montage(quotes):
-        return "<br>".join(f'&ldquo;{_h.escape(q)}&rdquo;' for q in quotes)
+    def _quote_card(eyebrow, target, pool, desc):
+        quote_js[target] = pool
+        reroll = (f' <button type="button" class="reroll" data-target="{target}">&#8635; another</button>'
+                  if len(pool) > 1 else "")
+        return (f'<div class="card"><p class="q">{eyebrow}{reroll}</p>'
+                f'<p class="a" id="q-{target}">&ldquo;{_h.escape(pool[0])}&rdquo;</p>'
+                f'<p class="d">{desc}</p></div>')
 
     if voice.get("goto"):
         ph, cnt, ns = voice["goto"]
         vcards.append(_card("What's your go-to prompt?", f'&ldquo;{_h.escape(ph)}&rdquo;',
               f'Your most-repeated prompt — <b>{cnt:,}</b> times across {ns} sessions.'))
-    rage = voice.get("crashouts") or []
-    if rage:
-        acts = {1: "a one-act tragedy", 2: "a meltdown in two acts"}.get(len(rage), "a meltdown in three acts")
-        vcards.append(_card("Your biggest crash-out?", _montage(rage),
-              f'Your most heated prompts — {acts}. We&rsquo;ve all been there.'))
-    cuff = voice.get("cryptics") or []
-    if cuff:
-        vcards.append(_card("Off the cuff?", _montage(cuff),
-              'The typos, the feelings, the lol — your most unfiltered asks, and the agent ran with them anyway.'))
+    if voice.get("crashouts"):
+        vcards.append(_quote_card("Your biggest crash-out?", "crashout", voice["crashouts"],
+              "Your most heated prompt. We&rsquo;ve all been there."))
+    if voice.get("cryptics"):
+        vcards.append(_quote_card("Off the cuff?", "cuff", voice["cryptics"],
+              "Unfiltered, typo&rsquo;d, mid-thought — and the agent ran with it anyway."))
     if vcards:
         P('<h2 class="section">In your own words</h2>')
-        P('<p class="lead">Pulled <b>verbatim</b> from your real prompts. These live only on this local '
-          'page — your words, on your machine — and we keep them out of the downloadable image on purpose.</p>')
+        P('<p class="lead">Pulled <b>verbatim</b> from your real prompts — hit <b>&#8635; another</b> to reroll. '
+          'These live only on this local page (your words, on your machine) and never go in the downloadable image.</p>')
         P(f'<div class="grid">{"".join(vcards)}</div>')
 
     P('<footer><span class="lock">🔒 Generated entirely on-device</span> by <span class="mono">paxel.py</span> — '
@@ -1785,6 +1796,11 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
       '<a href="https://www.roadmap.chat/community" target="_blank" rel="noopener">Roadmap</a></footer>')
     P('</div></div>')
     P("<script>(function(){")
+    P('var QUOTES=' + json.dumps(quote_js) + ';var QIDX={};')
+    P('document.querySelectorAll(".reroll").forEach(function(b){b.addEventListener("click",function(){'
+      'var t=b.getAttribute("data-target"),arr=QUOTES[t];if(!arr||arr.length<2)return;'
+      'QIDX[t]=((QIDX[t]||0)+1)%arr.length;var el=document.getElementById("q-"+t);'
+      'if(el)el.textContent="\\u201c"+arr[QIDX[t]]+"\\u201d";});});')
     P(f'var repo={json.dumps(REPO_URL)};var caption={json.dumps(caption)};')
     P('var x=document.getElementById("share-x");if(x)x.href="https://x.com/intent/tweet?text="+encodeURIComponent(caption);')
     P('var cb=document.getElementById("share-copy");if(cb)cb.addEventListener("click",function(){'
