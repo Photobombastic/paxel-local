@@ -1779,10 +1779,10 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
               f'Your most-repeated prompt — <b>{cnt:,}</b> times across {ns} sessions.'))
     if voice.get("crashouts"):
         vcards.append(_quote_card("Your biggest crash-out?", "crashout", voice["crashouts"],
-              "Your most heated prompt. We&rsquo;ve all been there."))
+              "One of your most heated prompts. We&rsquo;ve all been there."))
     if voice.get("cryptics"):
         vcards.append(_quote_card("Off the cuff?", "cuff", voice["cryptics"],
-              "Unfiltered, typo&rsquo;d, mid-thought — and the agent ran with it anyway."))
+              "One of your more unfiltered asks — straight from the keyboard, unedited."))
     if vcards:
         P('<h2 class="section">In your own words</h2>')
         P('<p class="lead">Pulled <b>verbatim</b> from your real prompts — hit <b>&#8635; another</b> to reroll. '
