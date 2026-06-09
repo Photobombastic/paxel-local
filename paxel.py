@@ -407,24 +407,31 @@ _POLITE_RE = re.compile(r'\b(thanks|thank you|thank u|thx|please|pls|appreciate|
 # --- "In your own words" cards: pulled VERBATIM from your real prompts. These quote raw
 # session text, so they render ONLY on the local page and are deliberately kept OUT of the
 # shareable download card (see card_data). HTML-escape every quote before injecting it. ---
-_TYPO_WORDS = {"teh", "hte", "wrok", "adn", "nad", "recieve", "seperate", "definately",
-               "thier", "alot", "wtih", "taht", "jsut", "becuase", "plz", "pls", "u", "ur",
-               "dont", "wont", "cant", "youre", "wodn", "fo", "ot", "si", "doesnt", "couldnt"}
+_TYPO_WORDS = {"teh", "hte", "thge", "wrok", "adn", "nad", "recieve", "seperate", "definately",
+               "thier", "alot", "wtih", "wiht", "taht", "thta", "jsut", "becuase", "plz", "pls",
+               "u", "ur", "r", "y", "k", "yea", "yeah", "yep", "yup", "nope", "lol", "lmao", "idk",
+               "dont", "wont", "cant", "doesnt", "didnt", "couldnt", "wouldnt", "isnt", "wasnt",
+               "youre", "theyre", "thats", "whats", "hows", "im", "ive", "ill", "id", "hes", "shes",
+               "wodn", "fo", "ot", "si", "hmm", "hmmm", "wat", "wut", "tho", "thru", "fix", "undo",
+               "nvm", "rn", "btw", "fr", "ok", "okay", "kk", "gah", "ugh", "argh", "oof",
+               "wtf", "wth", "omg", "ya", "nah", "meh", "huh", "welp", "oop", "oops", "aight"}
 
 
 def _typo_score(text):
-    """Rough 'how garbled is this' score — counts likely-typo tokens. Heuristic, not a
-    spell-checker; used only to surface a genuinely odd REAL prompt, never to invent one."""
+    """Rough 'how garbled/casual is this' score — counts likely-typo / texting tokens.
+    Heuristic, not a spell-checker; only used to surface a genuinely odd REAL prompt."""
     s = 0
     for t in re.findall(r"[a-z0-9']+", text.lower()):
         if t in _TYPO_WORDS:
             s += 1
         elif len(t) >= 4 and not re.search(r'[aeiou]', t):   # a vowel-less chunk
             s += 1
-        elif re.search(r'(.)\1\1', t):                        # 3+ of the same letter
+        elif re.search(r'(.)\1\1', t):                        # 3+ of the same letter (loool, yesss)
             s += 1
         elif re.search(r'[a-z]\d|\d[a-z]', t):                # digits glued into a word
             s += 1
+        elif "'" not in t and t.endswith(("nt", "re", "ll", "ve")) and t in _TYPO_WORDS:
+            s += 1                                            # missing apostrophe (dont, youre)
     return s
 
 
@@ -433,13 +440,59 @@ def _caps_ratio(text):
     return (sum(1 for c in letters if c.isupper()) / len(letters)) if letters else 0.0
 
 
+# Frustration / distress markers for the "biggest crash-out" card — these gate it, so a
+# clean all-caps EXCITEMENT prompt ("ONWARDS", "PUSH THRU") doesn't read as a meltdown.
+_RAGE_RE = re.compile(r'\b(wtf|wth|ffs|ugh+|argh+|seriously|literally|stop+|nope|why+|'
+                      r'are you (?:kidding|serious|sure|joking)|come on|for real|already said|'
+                      r'i said|told you|do ?not|dont|cant|never|jesus|christ|damn|hell|crap|'
+                      r'shit|fuck\w*|wrong|broke|broken|nightmare|stuck|fail\w*|hate|pressure|'
+                      r'stress\w*|overwhelm\w*|dying|exhaust\w*|help|no+\b|not\b)\b', re.I)
+
+
+def _crashout_score(text):
+    """How 'heated' a prompt reads — caps, exclamation pile-ups, ALLCAPS words, frustration
+    words, and BREVITY (terse all-caps menace — 'NO STOP', 'SOMETHING IS WRONG' — is funnier
+    than a long rant). Pulls a REAL prompt, never invents one."""
+    wc = len(text.split())
+    caps = _caps_ratio(text)
+    bangs = min(text.count("!") + text.count("?"), 5)
+    allcaps = min(len(re.findall(r'\b[A-Z]{3,}\b', text)), 4)
+    rage = min(len(_RAGE_RE.findall(text)), 3)
+    brevity = max(0, 9 - wc) * 0.5
+    return caps * 2.5 + brevity + allcaps * 0.4 + rage * 0.5 + bangs * 0.3
+
+
+_FEELS_RE = re.compile(r'\b(worried|scared|nervous|anxious|stressed|tired|exhausted|confused|'
+                       r'lost|sorry|stupid|dumb|idiot|hopeless|unemploy\w*|crying|cry|sad|'
+                       r'overwhelmed|panic\w*|dying|help me|please work)\b', re.I)
+_EMOTICON_RE = re.compile(r"[:;=]['\-^]?[\(\)\[\]\/\\|dpox3<>]", re.I)
+# Content-free affirmations/fillers — an "off the cuff" card needs more than "yep :)".
+_FILLER = {"ok", "okay", "yes", "yep", "yup", "yeah", "ya", "sure", "nice", "great", "cool",
+           "perfect", "thanks", "thank", "you", "done", "k", "kk", "good", "awesome", "love",
+           "got", "it", "this", "that", "lol", "haha", "nvm", "fine", "right", "correct", "exactly"}
+
+
+def _cryptic_score(text):
+    """The funniest off-the-cuff prompts: tiny, typo'd, lowercase, vague, and — the gold —
+    a stray emoticon or a flash of human vulnerability ('Im worried im unemploybale :(')."""
+    wc = len(text.split())
+    typ = _typo_score(text)
+    vague = len(re.findall(r'\b(it|that|this|the thing|those|them|stuff|one)\b', text, re.I))
+    lower = 1 if text == text.lower() else 0
+    nopunct = 1 if not re.search(r'[.?!]', text.strip()) else 0
+    short = max(0, 7 - wc) * 0.25
+    emo = 1.6 if _EMOTICON_RE.search(text) else 0
+    feels = 1.3 if _FEELS_RE.search(text) else 0
+    return typ * 1.0 + vague * 0.55 + lower * 0.5 + nopunct * 0.35 + short + emo + feels
+
+
 # A prompt can be surfaced verbatim only if it's actually the user's words — not a harness
 # marker, and not carrying a secret. We NEVER alter a shown prompt (Max: zero redaction); we
 # just refuse to SELECT one that's a credential or a system artifact rather than a real prompt.
 _SECRET_RE = re.compile(r'eyJ[A-Za-z0-9_\-]{20,}|sk-[A-Za-z0-9]{16,}|gh[posru]_[A-Za-z0-9]{16,}|'
                         r'AKIA[0-9A-Z]{12,}|Bearer\s+\S{16,}|[A-Fa-f0-9]{32,}|[A-Za-z0-9_\-]{36,}', re.I)
-_SYS_MARKER_RE = re.compile(r'\[request interrupted|\[tool|<system|<command|<local-command|'
-                            r'this block is not|tool_use|caveat:', re.I)
+_SYS_MARKER_RE = re.compile(r'\[request interrupted|\[image\b|\[image\s*#|\[pasted|\[tool|'
+                            r'<system|<command|<local-command|this block is not|tool_use|caveat:', re.I)
 
 
 def _safe_quote(text):
@@ -448,6 +501,13 @@ def _safe_quote(text):
     if _SYS_MARKER_RE.search(text) or _SECRET_RE.search(text):
         return False
     if any(len(tok) > 32 for tok in text.split()):   # a giant unbroken token = key/url/hash, not a word
+        return False
+    toks = text.split()
+    if len(toks) == 1 and re.fullmatch(r"[A-Z0-9]*\d[A-Z0-9]*", toks[0]) and len(toks[0]) >= 7:
+        return False                                  # a lone caps+digits token = Slack/ID, not a prompt
+    # PII guard — don't auto-SURFACE someone else's email / phone / long digit run. (This is a
+    # safe DEFAULT for arbitrary users; it never alters a prompt, it just won't select this one.)
+    if re.search(r'[\w.+-]+@[\w-]+\.[a-z]{2,}|\b\d{3}[\s.\-]?\d{3}[\s.\-]?\d{4}\b|\b\d{6,}\b', text, re.I):
         return False
     return True
 
@@ -500,8 +560,8 @@ def main():
     phrase_counts = Counter()      # normalized short prompt -> times seen
     phrase_repr = {}               # normalized -> first original spelling
     phrase_sess = defaultdict(set) # normalized -> session ids it appeared in
-    cryptic_best = (0, "")         # (score, verbatim text)
-    crashout_best = (0.0, "")      # (score, verbatim text)
+    cryptic_cands = []             # [(score, verbatim text)] — ranked at the end
+    crashout_cands = []            # [(score, verbatim text)]
     command_invocations = 0
 
     assistant_turns = 0
@@ -635,19 +695,21 @@ def main():
                                         phrase_counts[_norm] += 1
                                         phrase_repr.setdefault(_norm, cleaned.strip())
                                         phrase_sess[_norm].add(sid)
-                                if _safe_quote(cleaned) and 2 <= _wc <= 12:
-                                    _typ = _typo_score(cleaned)
-                                    if _typ >= 1:
-                                        _csc = _typ + (1 if _wc <= 5 else 0)
-                                        if _csc > cryptic_best[0]:
-                                            cryptic_best = (_csc, cleaned.strip())
-                                if _safe_quote(cleaned) and sum(c.isalpha() for c in cleaned) >= 8:
-                                    _cr = _caps_ratio(cleaned)
-                                    _capsword = bool(re.search(r"\b[A-Z]{4,}\b", cleaned))
-                                    if _cr >= 0.5 or _capsword or "!!" in cleaned:
-                                        _xsc = _cr + (0.4 if _capsword else 0) + (0.3 if "!!" in cleaned else 0)
-                                        if _xsc > crashout_best[0]:
-                                            crashout_best = (_xsc, cleaned.strip())
+                                if _safe_quote(cleaned):
+                                    if 3 <= _wc <= 14:
+                                        _words = re.findall(r"[a-z']+", cleaned.lower())
+                                        if _words and not all(w in _FILLER for w in _words):
+                                            _csc = _cryptic_score(cleaned)
+                                            if _csc >= 1.8:
+                                                cryptic_cands.append((round(_csc, 2), cleaned.strip()))
+                                    if sum(c.isalpha() for c in cleaned) >= 6 and _wc <= 16:
+                                        _bangs = cleaned.count("!") + cleaned.count("?")
+                                        # gate: must read NEGATIVE (frustration word or !!-level
+                                        # punctuation) — caps alone is excitement, not a crash-out
+                                        if _RAGE_RE.search(cleaned) or _bangs >= 2:
+                                            _xsc = _crashout_score(cleaned)
+                                            if _xsc >= 2.0:
+                                                crashout_cands.append((round(_xsc, 2), cleaned.strip()))
                                 if is_command:
                                     command_invocations += 1
                                 proj = os.path.basename(cwd) if cwd else "?"
@@ -966,7 +1028,19 @@ def main():
         if cnt >= 3 and len(phrase_sess.get(ph, ())) >= 2:
             goto = (phrase_repr[ph], cnt, len(phrase_sess[ph]))
             break
-    voice = {"goto": goto, "cryptic": cryptic_best[1] or None, "crashout": crashout_best[1] or None}
+    def _dedup_rank(cands):   # keep highest score per unique prompt, ranked (deterministic)
+        best = {}
+        for sc, tx in cands:
+            k = tx.lower()
+            if k not in best or sc > best[k][0]:
+                best[k] = (sc, tx)
+        return sorted(best.values(), key=lambda x: (-x[0], x[1]))   # tie-break on text → reproducible
+    cryptic_cands = _dedup_rank(cryptic_cands)
+    crashout_cands = _dedup_rank(crashout_cands)
+    # both crash-out and off-the-cuff are MONTAGES of the top short ones (funnier stacked)
+    short_rage = [tx for sc, tx in crashout_cands if len(tx.split()) <= 7][:3]
+    off_cuff = [tx for sc, tx in cryptic_cands][:3]
+    voice = {"goto": goto, "crashouts": short_rage, "cryptics": off_cuff}
     write_profile_html(stats, archetype, quote, scores, voice)
     print("\nWrote stats.json, report.md, narrative_input.md, profile.html to", OUT_DIR)
     if "--no-open" not in sys.argv:
@@ -1681,16 +1755,23 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     # Escape every quote (raw user text → XSS). Only render the cards that actually exist.
     voice = voice or {}
     vcards = []
+
+    def _montage(quotes):
+        return "<br>".join(f'&ldquo;{_h.escape(q)}&rdquo;' for q in quotes)
+
     if voice.get("goto"):
         ph, cnt, ns = voice["goto"]
         vcards.append(_card("What's your go-to prompt?", f'&ldquo;{_h.escape(ph)}&rdquo;',
               f'Your most-repeated prompt — <b>{cnt:,}</b> times across {ns} sessions.'))
-    if voice.get("cryptic"):
-        vcards.append(_card("Your most cryptic prompt?", f'&ldquo;{_h.escape(voice["cryptic"])}&rdquo;',
-              'Short, low-context, a little garbled — and the agent ran with it anyway.'))
-    if voice.get("crashout"):
-        vcards.append(_card("Your biggest crash-out?", f'&ldquo;{_h.escape(voice["crashout"])}&rdquo;',
-              'Your most heated prompt. We&rsquo;ve all been there.'))
+    rage = voice.get("crashouts") or []
+    if rage:
+        acts = {1: "a one-act tragedy", 2: "a meltdown in two acts"}.get(len(rage), "a meltdown in three acts")
+        vcards.append(_card("Your biggest crash-out?", _montage(rage),
+              f'Your most heated prompts — {acts}. We&rsquo;ve all been there.'))
+    cuff = voice.get("cryptics") or []
+    if cuff:
+        vcards.append(_card("Off the cuff?", _montage(cuff),
+              'The typos, the feelings, the lol — your most unfiltered asks, and the agent ran with them anyway.'))
     if vcards:
         P('<h2 class="section">In your own words</h2>')
         P('<p class="lead">Pulled <b>verbatim</b> from your real prompts. These live only on this local '
