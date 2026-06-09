@@ -125,11 +125,12 @@ Auto-detected and parsed (all reads local):
 | **Claude Code** | `~/.claude/projects` | full |
 | **Codex CLI** | `~/.codex/sessions` | full |
 | **Gemini CLI** | `~/.gemini/tmp` | full |
+| **Pi** | `~/.pi/agent/sessions` | full |
+| **opencode** | `~/.local/share/opencode/storage` | full |
 | Cursor | `…/Cursor/.../state.vscdb` | detected, experimental (SQLite blobs — not yet parsed) |
-| opencode | `~/.local/share/opencode` | detected, experimental (KV store — not yet parsed) |
 
 Non-Claude formats are translated into a common event shape so every metric works across
-tools (Claude-specific signals like skills/subagents/thinking are naturally richer).
+tools (Claude/Pi-specific signals like skills/subagents/thinking are naturally richer).
 
 ## Run it
 
@@ -179,8 +180,8 @@ brute-forcing.
 
 ## Scope decisions
 
-- **Multi-source** (Claude Code, Codex, Gemini), with per-source selection via args.
-  Cursor/opencode are blob/KV stores that need real reverse-engineering — detected and
+- **Multi-source** (Claude Code, Codex, Gemini, Pi, opencode), with per-source selection via args.
+  Cursor is a SQLite blob store that still needs real reverse-engineering — detected and
   flagged, not faked.
 - **One-shot.** Just re-run to rebuild as sessions accumulate.
 
@@ -205,8 +206,8 @@ Honest about what it can't see. If you can close one of these, open a PR:
   content never appears in the transcript, so the shell-authored estimate misses it. Git churn
   catches it *if* it was committed in a repo still on disk.
 - **`~/.claude/history.jsonl`** (a separate flat prompt log) isn't parsed yet.
-- **Cursor** (SQLite `state.vscdb` blobs) and **opencode** (KV store) are detected but not yet
-  parsed — reverse-engineering either into the common event shape is a great first PR.
+- **Cursor** (SQLite `state.vscdb` blobs) is detected but not yet parsed — reverse-engineering it
+  into the common event shape is a great first PR.
 - **Codex tool churn** from `apply_patch` counts raw patch lines (diff markers included), so it
   over-estimates; the gold-standard git churn is unaffected.
 - **Score grounding** — axis *criteria* are derived from gstack, but the **archetype** picker
