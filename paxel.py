@@ -1970,7 +1970,9 @@ if(ib)ib.addEventListener("click",function(){
       var x0=M+(IW-(inRow*colW+(inRow-1)*gapX))/2;           // center the row → partial rows don't jam left
       mini(c,x0+col*(colW+gapX),gridY+row*(cardH+gapY),colW,cardH,cards[i]);}
     c.fillStyle=mut;c.font="500 14px -apple-system,sans-serif";c.textAlign="center";c.fillText("Generated 100% on-device — nothing uploaded · github.com/Photobombastic/paxel-local",W/2,footerY);c.textAlign="left";
-    if(CARD.logo){var im=new Image();im.onload=function(){c.drawImage(im,M,32,54,54);finish();};im.onerror=finish;im.src=CARD.logo;}else{finish();}
+    if(CARD.logo){var im=new Image();im.onload=function(){
+      var k=Math.min(54/im.width,54/im.height),lw=im.width*k,lh=im.height*k;   // contain-fit: never squish the logo's aspect
+      c.drawImage(im,M+(54-lw)/2,32+(54-lh)/2,lw,lh);finish();};im.onerror=finish;im.src=CARD.logo;}else{finish();}
   }catch(e){alert("Image export failed — try a screenshot.");}
 });''')
     P("})();</script></body></html>")

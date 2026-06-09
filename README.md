@@ -1,20 +1,27 @@
 # paxel-local
 
-A fully-local recreation of YC's **Paxel** builder-profile tool. Same insights, nothing
-leaves your machine.
+**YC's [Paxel](https://paxel.ycombinator.com/) tells you how you build with AI — by shipping
+your coding-agent transcripts off your machine to do it.** Per YC's own description, it runs a
+Docker container that mounts your home directory, **sends transcript excerpts — your prompts,
+the agent's replies, tool-call snippets — to an LLM proxy**, and **uploads a JSON of scores,
+narratives, and session metadata to YC**, readable by any YC employee and retained
+indefinitely. The redaction strips credentials — *not* your source code, customer data,
+secrets, or unreleased ideas.
 
-## Why this exists
+**paxel-local gives you the same profile with zero data leaving your machine** — no upload, no
+proxy, no account, no network calls at all. One command reads your local transcripts and writes
+a branded, shareable builder profile:
 
-[Paxel](https://paxel.ycombinator.com/) reads your AI coding-agent session transcripts and
-emails you a "how you build with AI" profile. The catch is in YC's own description: it runs
-in a Docker container that mounts your home directory, **sends transcript excerpts (prompts,
-agent responses, tool-call snippets) to an LLM proxy**, and **uploads a JSON of scores,
-narratives, and session metadata to YC** (readable by any YC employee, retained indefinitely).
+![A paxel-local builder profile, generated 100% on-device](docs/example-poster.png)
 
-Your transcripts can contain private code, customer data, secrets, and unreleased ideas — and
-Paxel's redaction, by its own docs, only strips credentials, not any of that. If you'd rather
-not ship it off your laptop, this reproduces the same *output* with **zero data leaving the
-machine**.
+```bash
+git clone https://github.com/Photobombastic/paxel-local
+cd paxel-local && python3 paxel.py     # reads your local transcripts; opens your profile
+```
+
+Clone, run, done — your profile pops open in the browser: an archetype, a gstack-grounded
+scorecard, your signature moves, and a one-click shareable poster like the one above. Nothing
+leaves the laptop. *(Example above uses fictional data.)*
 
 ## Is this "exactly" Paxel?
 
