@@ -29,9 +29,9 @@ Outputs (in this script's directory):
   - narrative_input.md  curated, LOCAL-ONLY excerpts for the narrative pass
                         (may contain names/PII from your prompts — keep local)
 
-Sources: Claude Code, Codex CLI, and Gemini CLI (auto-detected). Cursor and
-opencode are detected but not yet parsed (experimental — see README). Restrict
-with args, e.g. `python3 paxel.py claude` for Claude-only; no args = all detected.
+Sources: Claude Code, Codex CLI, Gemini CLI, Pi, and opencode (auto-detected).
+Cursor is detected but not yet parsed (experimental — see README). Restrict with
+args, e.g. `python3 paxel.py claude` for Claude-only; no args = all detected.
 One-shot; just re-run to rebuild as sessions accumulate.
 """
 
@@ -56,7 +56,7 @@ READ_TOOLS = {"Read", "Grep", "Glob", "NotebookRead"}
 DISCOVER_TOOLS = {"WebSearch", "WebFetch", "ToolSearch"}
 EXEC_TOOLS = {"Bash", "BashOutput", "KillShell"}
 DELEGATE_TOOLS = {"Agent", "Task"}
-PLAN_TOOLS = {"TodoWrite", "ExitPlanMode", "EnterPlanMode", "EnterWorktree",
+PLAN_TOOLS = {"TodoWrite", "TodoRead", "ExitPlanMode", "EnterPlanMode", "EnterWorktree",
               "ExitWorktree", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"}
 SCHEDULE_TOOLS = {"ScheduleWakeup", "CronCreate", "CronDelete", "CronList",
                   "RemoteTrigger", "PushNotification", "Monitor"}
@@ -240,14 +240,15 @@ def pctile(sorted_vals, p):
 # Multi-source discovery + translators. Each non-Claude format is translated
 # into Claude-shaped event dicts so the single aggregation loop in main() works
 # unchanged across tools. Every read is local — nothing is uploaded.
-# Solid/tested: Claude Code, Codex CLI, Gemini CLI.
-# Experimental (detected, not yet parsed): Cursor (SQLite blobs), opencode (KV).
+# Solid/tested: Claude Code, Codex CLI, Gemini CLI, Pi, opencode.
+# Experimental (detected, not yet parsed): Cursor (SQLite blobs).
 # ---------------------------------------------------------------------------
 CODEX_DIR = os.path.expanduser("~/.codex/sessions")
 GEMINI_DIR = os.path.expanduser("~/.gemini/tmp")
 CURSOR_DB = os.path.expanduser("~/Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+PI_DIR = os.path.expanduser("~/.pi/agent/sessions")
 OPENCODE_DIR = os.path.expanduser("~/.local/share/opencode")
-ALL_SOURCES = ("claude", "codex", "gemini")
+ALL_SOURCES = ("claude", "codex", "gemini", "pi", "opencode")
 
 
 def discover_sources(selected):
@@ -261,20 +262,26 @@ def discover_sources(selected):
     if "gemini" in selected and os.path.isdir(GEMINI_DIR):
         for fp in sorted(glob.glob(os.path.join(GEMINI_DIR, "**", "*.json"), recursive=True)):
             out.append(("gemini", fp, "gemini"))
+    if "pi" in selected and os.path.isdir(PI_DIR):
+        for fp in sorted(glob.glob(os.path.join(PI_DIR, "**", "*.jsonl"), recursive=True)):
+            out.append(("pi", fp, "pi"))
+    if "opencode" in selected and os.path.isdir(OPENCODE_DIR):
+        session_glob = os.path.join(OPENCODE_DIR, "storage", "session", "*", "*.json")
+        for fp in sorted(glob.glob(session_glob)):
+            out.append(("opencode", fp, "opencode"))
     return out
 
 
 def note_experimental():
-    """Cursor (SQLite blobs) and opencode (KV store) need real reverse-engineering;
-    flag them as detected-but-unsupported rather than ship a fragile guess parser."""
-    found = [n for n, p in (("Cursor", CURSOR_DB), ("opencode", OPENCODE_DIR)) if os.path.exists(p)]
+    """Flag known local stores that are detected but still unsupported."""
+    found = [n for n, p in (("Cursor", CURSOR_DB),) if os.path.exists(p)]
     if found:
         print(f"  note: {', '.join(found)} detected but not yet parsed "
               f"(experimental — PRs welcome, see README)")
 
 
 def _texts(content):
-    """Join text from a Claude/Codex/Gemini content list (or plain string)."""
+    """Join text from a Claude/Codex/Gemini/Pi/opencode content list (or plain string)."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -286,6 +293,51 @@ def _texts(content):
                 out.append(b)
         return "\n".join(x for x in out if x)
     return ""
+
+
+def _iso_ms(ms):
+    if ms is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ms) / 1000).astimezone().isoformat()
+    except Exception:
+        return None
+
+
+def _canon_tool(name):
+    """Normalize Pi/opencode lower-case tool names to the Claude-style taxonomy."""
+    n = str(name or "tool")
+    key = n.lower().replace("-", "_")
+    mapping = {
+        "bash": "Bash", "shell": "Bash", "exec": "Bash", "run": "Bash",
+        "read": "Read", "grep": "Grep", "glob": "Glob", "list": "Glob", "ls": "Glob",
+        "edit": "Edit", "patch": "Edit", "write": "Write", "multi_edit": "MultiEdit",
+        "todowrite": "TodoWrite", "todo_write": "TodoWrite", "todoread": "TodoRead",
+        "task": "Agent", "agent": "Agent", "webfetch": "WebFetch", "web_fetch": "WebFetch",
+        "websearch": "WebSearch", "web_search": "WebSearch",
+    }
+    return mapping.get(key, n)
+
+
+def _canon_input(name, inp):
+    """Normalize common argument names enough for churn/test metrics to work."""
+    if not isinstance(inp, dict):
+        return {}
+    out = dict(inp)
+    cname = _canon_tool(name)
+    if cname == "Bash":
+        out.setdefault("command", out.get("cmd") or out.get("command") or out.get("script") or "")
+    elif cname in ("Read", "Write", "Edit", "MultiEdit"):
+        if "filePath" in out and "file_path" not in out:
+            out["file_path"] = out["filePath"]
+        if "path" in out and "file_path" not in out:
+            out["file_path"] = out["path"]
+    if cname == "Write" and "content" not in out:
+        out["content"] = out.get("text") or ""
+    if cname == "Edit":
+        out.setdefault("old_string", out.get("oldString") or out.get("old") or "")
+        out.setdefault("new_string", out.get("newString") or out.get("new") or out.get("content") or "")
+    return out
 
 
 def iter_events(fp, fmt):
@@ -310,6 +362,10 @@ def iter_events(fp, fmt):
         yield from _codex_events(fp)
     elif fmt == "gemini":
         yield from _gemini_events(fp)
+    elif fmt == "pi":
+        yield from _pi_events(fp)
+    elif fmt == "opencode":
+        yield from _opencode_events(fp)
 
 
 def _codex_tool(p):
@@ -423,6 +479,127 @@ def _gemini_events(fp):
                                        "input": fc.get("args") if isinstance(fc.get("args"), dict) else {}})
             yield {**base, "type": "assistant", "timestamp": ts,
                    "message": {"role": "assistant", "content": blocks}}
+
+
+def _pi_blocks(content):
+    blocks = []
+    if isinstance(content, str):
+        if content:
+            blocks.append({"type": "text", "text": content})
+        return blocks
+    if not isinstance(content, list):
+        return blocks
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        pt = part.get("type")
+        if pt == "text" and part.get("text"):
+            blocks.append({"type": "text", "text": part.get("text", "")})
+        elif pt == "thinking":
+            blocks.append({"type": "thinking", "thinking": part.get("thinking") or part.get("text") or ""})
+        elif pt in ("toolCall", "tool_use"):
+            name = _canon_tool(part.get("name"))
+            inp = part.get("arguments") or part.get("input") or {}
+            blocks.append({"type": "tool_use", "name": name, "input": _canon_input(name, inp)})
+        elif pt == "tool_result":
+            blocks.append({"type": "tool_result", "is_error": bool(part.get("is_error") or part.get("isError"))})
+    return blocks
+
+
+def _pi_events(fp):
+    sid, cwd = os.path.basename(fp).split(".")[0], None
+    try:
+        rows = [json.loads(line) for line in open(fp, "r", errors="replace") if line.strip()]
+    except Exception:
+        return
+    for obj in rows:
+        if isinstance(obj, dict) and obj.get("type") == "session":
+            sid = obj.get("id") or sid
+            cwd = obj.get("cwd") or cwd
+            break
+    base = {"sessionId": sid, "cwd": cwd}
+    for obj in rows:
+        if not isinstance(obj, dict) or obj.get("type") != "message":
+            continue
+        msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+        role = msg.get("role")
+        ts = obj.get("timestamp") or _iso_ms(msg.get("timestamp"))
+        if role == "user":
+            text = _texts(msg.get("content"))
+            if text:
+                yield {**base, "type": "user", "timestamp": ts,
+                       "message": {"role": "user", "content": text}}
+        elif role == "assistant":
+            yield {**base, "type": "assistant", "timestamp": ts,
+                   "message": {"role": "assistant", "model": msg.get("model"),
+                               "content": _pi_blocks(msg.get("content"))}}
+        elif role == "toolResult":
+            yield {**base, "type": "user", "timestamp": ts,
+                   "message": {"role": "user",
+                               "content": [{"type": "tool_result", "is_error": bool(msg.get("isError"))}]}}
+
+
+def _opencode_events(fp):
+    try:
+        sess = json.load(open(fp, "r", errors="replace"))
+    except Exception:
+        return
+    if not isinstance(sess, dict):
+        return
+    sid = sess.get("id") or os.path.basename(fp).split(".")[0]
+    cwd = sess.get("directory")
+    msg_dir = os.path.join(OPENCODE_DIR, "storage", "message", sid)
+    part_root = os.path.join(OPENCODE_DIR, "storage", "part")
+    messages = []
+    for mp in sorted(glob.glob(os.path.join(msg_dir, "*.json"))):
+        try:
+            m = json.load(open(mp, "r", errors="replace"))
+        except Exception:
+            continue
+        if isinstance(m, dict):
+            messages.append(m)
+    messages.sort(key=lambda m: (m.get("time") or {}).get("created") or 0)
+    base = {"sessionId": sid, "cwd": cwd}
+    for m in messages:
+        mid = m.get("id")
+        ts = _iso_ms((m.get("time") or {}).get("created"))
+        parts = []
+        for pp in sorted(glob.glob(os.path.join(part_root, str(mid), "*.json"))):
+            try:
+                p = json.load(open(pp, "r", errors="replace"))
+            except Exception:
+                continue
+            if isinstance(p, dict):
+                parts.append(p)
+        parts.sort(key=lambda p: ((p.get("time") or {}).get("start") or 0, p.get("id") or ""))
+        if m.get("role") == "user":
+            texts = [p.get("text") for p in parts if p.get("type") == "text" and p.get("text")]
+            if not texts:
+                summ = m.get("summary") if isinstance(m.get("summary"), dict) else {}
+                texts = [x for x in (summ.get("title"), summ.get("body")) if x]
+            if texts:
+                yield {**base, "type": "user", "timestamp": ts,
+                       "message": {"role": "user", "content": "\n".join(texts)}}
+        elif m.get("role") == "assistant":
+            blocks, tool_results = [], []
+            for p in parts:
+                pt = p.get("type")
+                if pt == "text" and p.get("text"):
+                    blocks.append({"type": "text", "text": p.get("text", "")})
+                elif pt == "reasoning":
+                    blocks.append({"type": "thinking", "thinking": p.get("text", "")})
+                elif pt == "tool":
+                    st = p.get("state") if isinstance(p.get("state"), dict) else {}
+                    name = _canon_tool(p.get("tool"))
+                    inp = _canon_input(name, st.get("input") if isinstance(st.get("input"), dict) else {})
+                    blocks.append({"type": "tool_use", "name": name, "input": inp})
+                    is_err = st.get("status") not in (None, "completed") or bool(st.get("error"))
+                    tool_results.append({"type": "tool_result", "is_error": is_err})
+            yield {**base, "type": "assistant", "timestamp": ts,
+                   "message": {"role": "assistant", "model": m.get("modelID"), "content": blocks}}
+            if tool_results:
+                yield {**base, "type": "user", "timestamp": ts,
+                       "message": {"role": "user", "content": tool_results}}
 
 
 # Politeness markers in your own prompts (for the "how polite are you" card). Word-boundaried.
@@ -566,7 +743,7 @@ def main():
           f"{', '.join(f'{k}:{v}' for k, v in by_src.items()) or 'no sources'}")
     note_experimental()
     if not sources:
-        print("\n  No transcripts found in ~/.claude/projects, ~/.codex/sessions, or ~/.gemini/tmp.")
+        print("\n  No transcripts found in ~/.claude/projects, ~/.codex/sessions, ~/.gemini/tmp, ~/.pi/agent/sessions, or ~/.local/share/opencode/storage.")
         print("  Nothing to analyze — run this where you've actually used a coding agent.")
         return
 
@@ -648,7 +825,7 @@ def main():
         file_edit_run = defaultdict(lambda: defaultdict(int))  # session -> file -> edits since commit
 
         # iter_events() yields Claude-shaped event dicts for every source format,
-        # so the per-event logic below is identical across Claude / Codex / Gemini.
+        # so the per-event logic below is identical across all supported sources.
         with contextlib.nullcontext(iter_events(fp, fmt)) as _evs:
             for ev in _evs:
                 if ev.get("__bad__"):
