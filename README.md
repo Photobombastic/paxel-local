@@ -33,7 +33,7 @@ One command emits a complete, **branded, shareable `profile.html`** — open it 
 2. **A 0–10 scorecard** across **four dimensions** (Execution, Planning, Steering, Engineering), each grounded in gstack (below).
 3. **Your signature moves** — the decision-patterns in how you direct the AI ("you review more than you write", "plan wide, then grind narrow"), drawn from real session behavior and tagged to the gstack stage each expresses.
 4. **Your growth edge** — a few specific things to try next, keyed to your *own* weakest signals and the gstack skill that addresses each — not generic advice.
-5. **A "what we noticed" card grid** + Share buttons (Post on X / Copy caption / Download a 1200×630 image card that works in every browser).
+5. **A "what we noticed" card grid** + Share buttons (Post on X / Copy caption / Download a **branded poster image** — archetype, scorecard, headline numbers and your highlight cards in one PNG that works in every browser).
 
 No manual step, no LLM call required. The archetype, scores, signature moves, and growth edges all
 come from **transparent local rule engines** (`compute_scores` / `pick_archetype` / `signature_moves`
@@ -112,8 +112,9 @@ python3 paxel.py            # all detected sources → writes profile.html (+ re
 python3 paxel.py claude     # restrict to one (or several) sources, e.g. just Claude Code
 ```
 
-Then open `profile.html` in your browser. No dependencies beyond the Python 3 standard
-library. **No network calls anywhere.** For
+It then **opens `profile.html` in your browser automatically** when it finishes (pass
+`--no-open` to skip — useful on a headless box or in CI, where it just prints the path).
+No dependencies beyond the Python 3 standard library. **No network calls anywhere.** For
 accurate churn it shells out to the local `git` CLI (`git log --numstat`) on the repos found
 in your transcripts — still 100% on-device, nothing uploaded.
 

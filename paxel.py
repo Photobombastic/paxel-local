@@ -1224,6 +1224,15 @@ SCORE_NOTES = {
                    "one over and over, low error rate, and checking your work.",
 }
 
+# One-line versions of the axis notes for the shareable poster image — the full SCORE_NOTES
+# don't fit on a single line under a bar on the card.
+SCORE_NOTES_SHORT = {
+    "Execution": "Shipped output, at AI leverage",
+    "Planning": "Think before you build",
+    "Steering": "Hands-on direction of the agent",
+    "Engineering": "Craft, with little rework",
+}
+
 
 def _clamp(x):
     return max(0.0, min(1.0, x))
@@ -1232,6 +1241,21 @@ def _clamp(x):
 def _d10(x):
     """First 10 chars of an ISO date, or '—' when missing (empty/timestampless corpus)."""
     return (x or "")[:10] or "—"
+
+
+_MONTHS = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _mon_yr(iso):
+    """'2025-06-08' -> 'Jun 2025' (human-readable timeframe for the share poster)."""
+    iso = iso or ""
+    if len(iso) >= 7 and iso[4] == "-":
+        try:
+            return f"{_MONTHS[int(iso[5:7])]} {iso[0:4]}"
+        except (ValueError, IndexError):
+            pass
+    return (iso[:10] or "—")
 
 
 def _skill_uses(stats, needle):
@@ -1582,6 +1606,17 @@ _PROFILE_CSS = """<style>
 </style>"""
 
 
+def _plain(s):
+    """Flatten the trusted <b>/<i>/<code> markup (and the few HTML entities we emit) out of
+    a card string so it can be drawn as plain text on the canvas poster. Inputs are
+    safe-by-construction (numbers / static templates — see _card)."""
+    s = re.sub(r"<[^>]+>", "", s or "")
+    for a, b in (("&amp;", "&"), ("&rsquo;", "’"), ("&lsquo;", "‘"),
+                 ("&ldquo;", "“"), ("&rdquo;", "”"), ("&mdash;", "—")):
+        s = s.replace(a, b)
+    return s
+
+
 def _card(q, a, d, flag=False):
     # q/a/d are injected RAW (no escaping) so callers can use intentional <b>/<code>/<i>
     # markup. Every caller must pass safe-by-construction strings: numbers, static
@@ -1681,16 +1716,66 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     moves_html = "".join(_card(tag, title, ev) for tag, title, ev in moves)
     edges_html = "".join(_card(eb, title, adv, flag=True) for eb, title, adv in edges)
 
-    # Data for the canvas-drawn 1200×630 share card (no foreignObject → no canvas taint
-    # → the download actually works in every browser, not just Chromium).
+    # Data for the canvas-drawn share POSTER (one tall 1200px-wide PNG, drawn at download
+    # time so there's no foreignObject → no canvas taint → it works in every browser).
+    # Carries: archetype + tagline + timeframe, the scorecard (with one-line notes) paired
+    # with the headline numbers, and the curated insight/quote cards. SUBSTANCE FIRST: the
+    # signature move + insights lead; the two quote cards (funny, low-substance) come LAST.
+    # Quotes are routed through _safe_quote, and the off-the-cuff card is re-read LIVE from
+    # the page (#q-cuff) at click time, so a reroll is honored and the user is the gate.
+    _voc = voice or {}
+    poster_cards = []
+    if moves:
+        _mtag, _mtitle, _mev = moves[0]
+        poster_cards.append({"mode": "insight", "eyebrow": _plain(_mtag),
+                             "headline": _plain(_mtitle), "sub": _plain(_mev)})
+    if b["delegate_actions"] > 0:
+        poster_cards.append({"mode": "insight", "eyebrow": "How many agents?",
+                             "headline": f'{b["delegate_actions"]:,} subagents',
+                             "sub": f'About {per_sess} per session, plus {b["background_tasks"]:,} '
+                                    f'background tasks and {b["scheduled_actions"]} scheduled runs.'})
+    poster_cards += [
+        {"mode": "insight", "eyebrow": "Best work?", "headline": tod,
+         "sub": f"Heaviest work around {h12}."},
+        {"mode": "insight", "eyebrow": "Weekends?", "headline": weekend_a, "sub": _plain(weekend_d)},
+        {"mode": "insight", "eyebrow": "Your agent is…", "headline": agent_a, "sub": _plain(agent_d)},
+        {"mode": "insight", "eyebrow": "Polite to it?", "headline": polite_a, "sub": _plain(polite_d)},
+    ]
+    if _voc.get("goto") and _safe_quote(_voc["goto"][0]):
+        _ph, _cnt, _ns = _voc["goto"]
+        poster_cards.append({"mode": "quote", "eyebrow": "Go-to prompt",
+                             "headline": _ph, "sub": f"Most-repeated — {_cnt:,}×."})
+    if _voc.get("cryptics"):
+        poster_cards.append({"mode": "quote", "eyebrow": "Off the cuff", "live": "cuff",
+                             "headline": _voc["cryptics"][0], "sub": "Straight from the keyboard."})
+
+    _tag = quote.strip()
+    if _tag:
+        _tag = _tag[0].upper() + _tag[1:]
+        if _tag[-1] not in ".!?":
+            _tag += "."
+    _dr = c["date_range"] or ["", ""]
+    # timeframe + sessions only — prompts/tool-calls already live in "By the numbers".
+    _context = f'{_mon_yr(_dr[0])} → {_mon_yr(_dr[1])}  ·  {v["total_sessions"]:,} sessions'
+    # Lead "By the numbers" stat adapts so a non-delegating user (most Codex/Gemini users, and
+    # plenty of Claude ones) never gets a weak "0.0 agents / session" headline: agents/session
+    # for real delegators → else reasoning blocks → else lines edited (all universally non-zero).
+    if b["delegate_actions"] >= 20 and per_sess >= 0.5:
+        _first_stat = [f'{per_sess}', "agents / session"]
+    elif v["thinking_blocks"] >= 50:
+        _first_stat = [f'{v["thinking_blocks"]:,}', "reasoning blocks"]
+    else:
+        _first_stat = [f'{vel["tool_churn_edit_write"]:,}', "lines edited"]
     card_data = json.dumps({
         "arch": archetype,
-        "quote": quote,
-        "scores": [[k, val] for k, val in scores.items()],
-        "stats": [[f'{v["total_sessions"]}', "sessions"],
+        "tagline": _tag,
+        "context": _context,
+        "scores": [[k, val, SCORE_NOTES_SHORT.get(k, "")] for k, val in scores.items()],
+        "stats": [_first_stat,
                   [f'{v["total_prompts"]:,}', "prompts"],
                   [f'{v["tool_calls_total"]:,}', "tool calls"],
                   [f'{vel["git_churn_total"]:,}', "git lines"]],
+        "cards": poster_cards,
         "logo": logo,
     })
 
@@ -1758,9 +1843,11 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     P("".join(cards))
     P('</div>')
 
-    # "In your own words" — VERBATIM prompt quotes. Local page ONLY (gitignored, your data,
-    # your machine); deliberately NOT in card_data, so they never reach the shareable image.
-    # Escape every quote (raw user text → XSS). Only render the cards that actually exist.
+    # "In your own words" — VERBATIM prompt quotes (each already _safe_quote-filtered for
+    # secrets/PII upstream). Rendered on the local page (gitignored). The go-to and the
+    # off-the-cuff also feed the shareable poster (see poster_cards above) — the off-cuff via
+    # a LIVE read of #q-cuff at download, so a reroll is honored. The crash-out stays
+    # page-only. Escape every quote (raw user text → XSS). Only render cards that exist.
     voice = voice or {}
     vcards = []
     quote_js = {}   # target -> [raw quotes] for the ↻ reroll button (cycles the pool client-side)
@@ -1785,8 +1872,10 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
               "One of your more unfiltered asks — straight from the keyboard, unedited."))
     if vcards:
         P('<h2 class="section">In your own words</h2>')
-        P('<p class="lead">Pulled <b>verbatim</b> from your real prompts — hit <b>&#8635; another</b> to reroll. '
-          'These live only on this local page (your words, on your machine) and never go in the downloadable image.</p>')
+        P('<p class="lead">Pulled <b>verbatim</b> from your real prompts (filtered for secrets &amp; PII) — '
+          'hit <b>&#8635; another</b> to reroll. Your go-to and off-the-cuff lines also land on the shareable '
+          'image; the off-the-cuff one uses <b>whichever you&rsquo;ve rerolled to</b>, so land on one you like '
+          'before you download. Everything else stays on this local page, on your machine.</p>')
         P(f'<div class="grid">{"".join(vcards)}</div>')
 
     P('<footer><span class="lock">🔒 Generated entirely on-device</span> by <span class="mono">paxel.py</span> — '
@@ -1812,32 +1901,76 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     P(r'''var ib=document.getElementById("share-img");
 if(ib)ib.addEventListener("click",function(){
   try{
-    var W=1200,H=630,s=2,slate="#313941",beak="#ED7379",beakD="#D14E57",text="#16191d",mut="#5e6a73",line="#d9dee2",track="#dde2e6";
-    var cv=document.createElement("canvas");cv.width=W*s;cv.height=H*s;
-    var c=cv.getContext("2d");c.scale(s,s);c.textBaseline="alphabetic";
-    c.fillStyle="#ffffff";c.fillRect(0,0,W,H);c.fillStyle=beak;c.fillRect(0,0,W,6);
-    function wrap(t,x,y,mw,lh,max){var ws=t.split(" "),ln="",n=0;for(var i=0;i<ws.length;i++){var tn=ln?ln+" "+ws[i]:ws[i];if(c.measureText(tn).width>mw&&ln){c.fillText(ln,x,y);y+=lh;ln=ws[i];n++;if(max&&n>=max){c.fillText(ln+"…",x,y);return y;}}else{ln=tn;}}c.fillText(ln,x,y);return y;}
-    function draw(){
-      var bx0=CARD.logo?130:56;
-      c.fillStyle=slate;c.font="700 26px -apple-system,'Segoe UI',Roboto,sans-serif";c.fillText("Roadmap",bx0,64);
-      var bw=c.measureText("Roadmap").width;c.fillStyle=mut;c.font="500 17px -apple-system,sans-serif";c.fillText("· Builder Profile",bx0+bw+10,64);
-      c.textAlign="right";c.fillStyle=mut;c.font="600 13px -apple-system,sans-serif";c.fillText("Generated locally · nothing uploaded",W-56,58);c.textAlign="left";
-      c.strokeStyle=line;c.lineWidth=1;c.beginPath();c.moveTo(56,92);c.lineTo(W-56,92);c.stroke();
-      c.fillStyle=mut;c.font="700 13px -apple-system,sans-serif";c.fillText("YOUR BUILDER PROFILE",56,136);
-      var fs=58;c.font="800 "+fs+"px Georgia,'Times New Roman',serif";while(c.measureText(CARD.arch+".").width>W-112&&fs>30){fs-=2;c.font="800 "+fs+"px Georgia,serif";}
-      c.fillStyle=beak;c.fillText(CARD.arch+".",56,150+fs);
-      c.fillStyle="#3b444b";c.font="italic 21px Georgia,serif";var qy=wrap("“"+CARD.quote+"”",56,150+fs+42,W-130,30,2);
-      var sy=qy+44;c.fillStyle=mut;c.font="700 13px -apple-system,sans-serif";c.fillText("GSTACK SCORECARD",56,sy);
-      var rows=CARD.scores.length,base=sy+16,rh=Math.min(34,(H-70-base)/rows);
-      for(var i=0;i<rows;i++){var ry=base+18+i*rh,nm=CARD.scores[i][0],vl=CARD.scores[i][1];
-        c.fillStyle=slate;c.font="600 15px -apple-system,sans-serif";c.fillText(nm,56,ry+4);
-        var bx=270,bw2=600,bh=12,by=ry-7;c.fillStyle=track;c.fillRect(bx,by,bw2,bh);
-        var g=c.createLinearGradient(bx,0,bx+bw2,0);g.addColorStop(0,beakD);g.addColorStop(1,beak);c.fillStyle=g;c.fillRect(bx,by,bw2*(vl/10),bh);
-        c.fillStyle=text;c.font="800 15px ui-monospace,Menlo,monospace";c.textAlign="right";c.fillText(vl.toFixed(1),W-56,ry+4);c.textAlign="left";}
-      c.fillStyle=mut;c.font="500 13px -apple-system,sans-serif";c.fillText("Generated 100% on-device · github.com/Photobombastic/paxel-local",56,H-24);
-      cv.toBlob(function(bl){if(!bl){alert("Image export failed — try a screenshot.");return;}var a=document.createElement("a");a.href=URL.createObjectURL(bl);a.download="builder-profile.png";a.click();});
+    var W=1200,M=48,s=2,IW=W-2*M;
+    var beak="#ED7379",beakD="#D14E57",slate="#313941",mut="#5e6a73",line="#dfe3e7",track="#dde2e6";
+    function L(c,t,mw){var ws=String(t).split(" "),ln="",o=[];for(var i=0;i<ws.length;i++){var tn=ln?ln+" "+ws[i]:ws[i];if(c.measureText(tn).width>mw&&ln){o.push(ln);ln=ws[i];}else ln=tn;}o.push(ln);return o;}
+    function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+    function box(c,x,y,w,h){c.save();c.shadowColor="rgba(40,50,60,.10)";c.shadowBlur=20;c.shadowOffsetY=7;c.fillStyle="#fff";rr(c,x,y,w,h,16);c.fill();c.restore();c.strokeStyle="#e8ebee";c.lineWidth=1;rr(c,x,y,w,h,16);c.stroke();}
+    function mini(c,x,y,w,h,card){
+      var pad=20,iw=w-2*pad,cx=x+w/2;box(c,x,y,w,h);c.textAlign="center";
+      c.fillStyle=beakD;c.font="700 10.5px -apple-system,sans-serif";if(c.letterSpacing!==undefined)c.letterSpacing="1px";
+      var el=L(c,String(card.eyebrow).toUpperCase(),iw);if(el.length>2)el=el.slice(0,2);
+      for(var k=0;k<el.length;k++)c.fillText(el[k],cx,y+pad+11+k*14);if(c.letterSpacing!==undefined)c.letterSpacing="0px";
+      // TOP-ANCHOR the content (not vertically centered) so every headline in a row shares
+      // a baseline; leftover whitespace collects at the bottom of shorter cards.
+      var ebBot=y+pad+11+(el.length-1)*14+6,gTop=ebBot+14,q=card.mode==="quote";
+      var hfs=q?29:23;function hf(z){return (q?"italic 800 ":"800 ")+z+"px Georgia,serif";}
+      var head=q?("“"+card.headline+"”"):card.headline;c.font=hf(hfs);var hl=L(c,head,iw);
+      while(hl.length>2&&hfs>16){hfs-=1;c.font=hf(hfs);hl=L(c,head,iw);}
+      if(hl.length>2){hl=hl.slice(0,2);hl[1]=hl[1].replace(/[\s—-]+$/,"")+"…";}
+      var hLH=hfs+4;c.fillStyle="#181c1f";c.font=hf(hfs);for(var k=0;k<hl.length;k++)c.fillText(hl[k],cx,gTop+hfs-2+k*hLH);
+      c.font="400 13px -apple-system,sans-serif";var sl=L(c,card.sub,iw),smax=q?2:3;
+      if(sl.length>smax){sl=sl.slice(0,smax);sl[smax-1]=sl[smax-1].replace(/[\s—-]+$/,"")+"…";}
+      var sTop=gTop+hl.length*hLH+12;c.fillStyle=mut;c.font="400 13px -apple-system,sans-serif";
+      for(var k=0;k<sl.length;k++)c.fillText(sl[k],cx,sTop+11+k*18);
+      c.textAlign="left";
     }
-    if(CARD.logo){var im=new Image();im.onload=function(){c.drawImage(im,56,32,46,46);draw();};im.onerror=draw;im.src=CARD.logo;}else{draw();}
+    // WYSIWYG: pull whatever quote is showing on the page now into any "live" card (off-cuff reroll)
+    var cards=CARD.cards.map(function(cd){
+      if(cd.live){var el=document.getElementById("q-"+cd.live);
+        if(el){var t=el.textContent.replace(/^[\s“"]+/,"").replace(/[\s”"]+$/,"");if(t)cd=Object.assign({},cd,{headline:t});}}
+      return cd;});
+    // layout — tightened top gap; height grows with the card count
+    var mc=document.createElement("canvas").getContext("2d");
+    var afs=88;mc.font="800 "+afs+"px Georgia,serif";while(mc.measureText(CARD.arch+".").width>IW&&afs>48){afs-=2;mc.font="800 "+afs+"px Georgia,serif";}
+    var heroY=96,archB=heroY+12+Math.round(afs*0.74),tagY=archB+40,ctxY=tagY+30,scY=ctxY+42,scH=348,scEnd=scY+scH;
+    var gridY=scEnd+30,gc=4,rows=Math.ceil(cards.length/gc),cardH=176,gapY=22;
+    var gridEnd=rows>0?gridY+rows*cardH+(rows-1)*gapY:scEnd,footerY=gridEnd+44,H=footerY+34;
+    var cv=document.createElement("canvas");cv.width=W*s;cv.height=H*s;
+    var c=cv.getContext("2d");c.scale(s,s);c.textBaseline="alphabetic";c.textAlign="left";
+    function finish(){cv.toBlob(function(bl){if(!bl){alert("Image export failed — try a screenshot.");return;}var a=document.createElement("a");a.href=URL.createObjectURL(bl);a.download="builder-profile.png";a.click();});}
+    c.fillStyle="#edeff2";c.fillRect(0,0,W,H);c.fillStyle=beak;c.fillRect(0,0,W,8);
+    var bx0=CARD.logo?M+76:M;
+    c.fillStyle=slate;c.font="700 26px -apple-system,sans-serif";c.fillText("Roadmap",bx0,64);
+    c.font="600 13px -apple-system,sans-serif";var bt="Generated locally · nothing uploaded",btw=c.measureText(bt).width,btx=W-M-btw;
+    c.save();c.strokeStyle=mut;c.fillStyle=mut;c.lineWidth=1.5;c.beginPath();c.arc(btx-12,55,3,Math.PI,2*Math.PI);c.stroke();rr(c,btx-17,55,10,8,2);c.fill();c.restore();
+    c.fillStyle=mut;c.fillText(bt,btx,61);
+    c.fillStyle=beakD;c.font="700 13px -apple-system,sans-serif";if(c.letterSpacing!==undefined)c.letterSpacing="2px";c.fillText("YOUR BUILDER PROFILE",M,heroY);if(c.letterSpacing!==undefined)c.letterSpacing="0px";
+    c.font="800 "+afs+"px Georgia,serif";c.fillStyle=beak;c.fillText(CARD.arch+".",M,archB);
+    c.fillStyle="#3b444b";c.font="italic 27px Georgia,serif";c.fillText(L(c,CARD.tagline,IW)[0],M,tagY);
+    if(CARD.context){c.fillStyle=mut;c.font="500 15px -apple-system,sans-serif";c.fillText(CARD.context,M,ctxY);}
+    box(c,M,scY,IW,scH);
+    var pad=40,ix=M+pad,half=IW/2;
+    c.fillStyle=mut;c.font="700 13px -apple-system,sans-serif";if(c.letterSpacing!==undefined)c.letterSpacing="1px";c.fillText("GSTACK SCORECARD",ix,scY+50);
+    var stx=M+half+38;c.fillText("BY THE NUMBERS",stx,scY+50);if(c.letterSpacing!==undefined)c.letterSpacing="0px";
+    var sc=CARD.scores,base=scY+96,rh=64,barL=ix+150,barR=M+half-86,valX=barR+46;
+    for(var i=0;i<sc.length;i++){var ry=base+i*rh,nm=sc[i][0],vl=sc[i][1],note=sc[i][2]||"";
+      c.fillStyle=slate;c.font="700 16px -apple-system,sans-serif";c.fillText(nm,ix,ry);
+      var bw2=barR-barL,bh=13,by=ry-13;c.fillStyle=track;rr(c,barL,by,bw2,bh,6);c.fill();
+      var g=c.createLinearGradient(barL,0,barL+bw2,0);g.addColorStop(0,beakD);g.addColorStop(1,beak);c.fillStyle=g;rr(c,barL,by,Math.max(bh,bw2*(vl/10)),bh,6);c.fill();
+      c.fillStyle="#16191d";c.font="800 17px ui-monospace,Menlo,monospace";c.textAlign="right";c.fillText(Number(vl).toFixed(1),valX,ry);c.textAlign="left";
+      c.fillStyle=mut;c.font="400 13px -apple-system,sans-serif";c.fillText(note,ix,ry+22);}
+    var dvx=M+half+4;c.strokeStyle=line;c.lineWidth=1;c.beginPath();c.moveTo(dvx,scY+38);c.lineTo(dvx,scY+scH-34);c.stroke();
+    var stt=CARD.stats||[];for(var j=0;j<stt.length&&j<sc.length;j++){var syy=base+j*rh;
+      c.fillStyle=slate;c.font="800 30px ui-monospace,Menlo,monospace";c.fillText(stt[j][0],stx,syy);var w2=c.measureText(stt[j][0]).width;
+      c.fillStyle=mut;c.font="500 14px -apple-system,sans-serif";c.fillText(stt[j][1],stx+w2+12,syy);}
+    var gapX=16,colW=(IW-(gc-1)*gapX)/gc;
+    for(var i=0;i<cards.length;i++){var row=Math.floor(i/gc),col=i%gc;
+      var inRow=Math.min(gc,cards.length-row*gc);            // cards in THIS row (last row may be partial)
+      var x0=M+(IW-(inRow*colW+(inRow-1)*gapX))/2;           // center the row → partial rows don't jam left
+      mini(c,x0+col*(colW+gapX),gridY+row*(cardH+gapY),colW,cardH,cards[i]);}
+    c.fillStyle=mut;c.font="500 14px -apple-system,sans-serif";c.textAlign="center";c.fillText("Generated 100% on-device — nothing uploaded · github.com/Photobombastic/paxel-local",W/2,footerY);c.textAlign="left";
+    if(CARD.logo){var im=new Image();im.onload=function(){c.drawImage(im,M,32,54,54);finish();};im.onerror=finish;im.src=CARD.logo;}else{finish();}
   }catch(e){alert("Image export failed — try a screenshot.");}
 });''')
     P("})();</script></body></html>")
