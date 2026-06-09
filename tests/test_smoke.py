@@ -33,9 +33,11 @@ SRC_DIRS = dict(
     GEMINI_DIR=os.path.join(FIX, "gemini"),
     PI_DIR=os.path.join(FIX, "pi"),
     OPENCODE_DIR=os.path.join(FIX, "opencode"),
-    CURSOR_DB=os.path.join(FIX, "__no_cursor__"),   # nonexistent → note_experimental() stays quiet
+    CURSOR_DIR=os.path.join(FIX, "cursor", "projects"),
+    CURSOR_DB=os.path.join(FIX, "cursor", "state.vscdb"),
 )
-EXPECTED_SOURCES = {"claude", "codex", "gemini", "pi", "opencode"}
+EXPECTED_SOURCES = {"claude", "codex", "gemini", "pi", "opencode", "cursor"}
+EXPECTED_FMTS = EXPECTED_SOURCES - {"cursor"} | {"cursor-jsonl", "cursor-sqlite"}
 SCORED_AXES = {"Execution", "Planning", "Engineering"}
 
 
@@ -56,11 +58,11 @@ def _run(testcase, args):
 
 
 class TestDiscovery(unittest.TestCase):
-    def test_all_five_sources_discovered(self):
+    def test_all_sources_discovered(self):
         with mock.patch.multiple(paxel, **SRC_DIRS):
             found = paxel.discover_sources(list(paxel.ALL_SOURCES))
         fmts = {fmt for _, _, fmt in found}
-        self.assertEqual(fmts, EXPECTED_SOURCES,
+        self.assertEqual(fmts, EXPECTED_FMTS,
                          f"a source fixture stopped being discovered: got {fmts}")
 
 
@@ -145,6 +147,107 @@ class TestUnits(unittest.TestCase):
         self.assertEqual(paxel._canon_tool("bash"), "Bash")
         self.assertEqual(paxel._canon_tool("read"), "Read")
         self.assertEqual(paxel._canon_tool("edit"), "Edit")
+
+    def test_cursor_tool_name_maps_cursor_tools(self):
+        # SQLite-era snake_case names
+        self.assertEqual(paxel._cursor_tool_name("read_file_v2"), "Read")
+        self.assertEqual(paxel._cursor_tool_name("run_terminal_command_v2"), "Bash")
+        self.assertEqual(paxel._cursor_tool_name("task_v2"), "Agent")
+        # modern JSONL CamelCase names (the StrReplace miss zeroed Cursor tool churn)
+        self.assertEqual(paxel._cursor_tool_name("StrReplace"), "Edit")
+        self.assertEqual(paxel._cursor_tool_name("ApplyPatch"), "Edit")
+        self.assertEqual(paxel._cursor_tool_name("ReadFile"), "Read")
+        self.assertEqual(paxel._cursor_tool_name("ReadLints"), "Read")
+        self.assertEqual(paxel._cursor_tool_name("Shell"), "Bash")
+        self.assertEqual(paxel._cursor_tool_name("rg"), "Grep")
+        self.assertEqual(paxel._cursor_tool_name("SemanticSearch"), "Grep")
+        self.assertEqual(paxel._cursor_tool_name("Delete"), "Edit")
+        self.assertEqual(paxel._cursor_tool_name("AskQuestion"), "AskUserQuestion")
+        self.assertEqual(paxel._cursor_tool_name("CreatePlan"), "EnterPlanMode")
+        self.assertEqual(paxel._cursor_tool_name("Subagent"), "Agent")
+        self.assertEqual(paxel._cursor_tool_name("Task"), "Agent")
+
+    def test_cursor_call_mcp_tool_counts_as_mcp(self):
+        name, inp = paxel._cursor_tool("CallMcpTool",
+                                       {"server": "linear", "toolName": "search_issues"})
+        self.assertEqual(name, "mcp__linear__search_issues")
+        self.assertEqual(paxel.classify_tool(name), "explore")
+
+    def test_cursor_apply_patch_string_params_become_churn(self):
+        patch = "*** Update File: src/foo.py\n+new line\n+another\n"
+        name, inp = paxel._cursor_tool("ApplyPatch", patch)
+        self.assertEqual(name, "Edit")
+        self.assertEqual(inp["file_path"], "src/foo.py")
+        self.assertGreater(paxel.line_count(inp["new_string"]), 0)
+
+    def test_cursor_clean_prompt_extracts_user_query(self):
+        wrapped = ("<attached_files>\n<file>x.py</file>\n</attached_files>\n"
+                   "<user_query>\nfix the bug\n</user_query>")
+        self.assertEqual(paxel._cursor_clean_prompt(wrapped), "fix the bug")
+        # no <user_query>: harness wrapper blocks are stripped, human text kept
+        bare = "<attached_files>\n<file>x.py</file>\n</attached_files>\nplain question"
+        self.assertEqual(paxel._cursor_clean_prompt(bare), "plain question")
+
+    def test_cursor_project_cwd_from_slug(self):
+        cwd = paxel._cursor_project_cwd("Users-demo-cursorproj")
+        self.assertEqual(cwd, "/Users/demo/cursorproj")
+
+    def test_cursor_subagent_meta_attributes_to_parent_session(self):
+        fp = os.path.join(SRC_DIRS["CURSOR_DIR"], "Users-demo-cursorproj",
+                          "agent-transcripts", "demo-session", "subagents",
+                          "sub-explore-1.jsonl")
+        sid, cwd, sidechain = paxel._cursor_jsonl_meta(fp)
+        self.assertTrue(sidechain)
+        self.assertEqual(sid, "demo-session")
+        self.assertEqual(cwd, "/Users/demo/cursorproj")
+
+    def test_cursor_prefers_sqlite_copy_over_jsonl_twin(self):
+        # SQLite bubbles carry timestamps + tool statuses the JSONL lacks, so the
+        # JSONL twin of a composer in state.vscdb must be dropped — but subagent
+        # sidechains and JSONL-only sessions must survive the dedup.
+        with mock.patch.multiple(paxel, **SRC_DIRS):
+            sources = paxel.discover_sources(["cursor"])
+            kept, twins = paxel._cursor_dedup(sources)
+        kept_jsonl = {os.path.basename(fp) for _, fp, fmt in kept if fmt == "cursor-jsonl"}
+        self.assertNotIn("demo-session.jsonl", kept_jsonl)         # covered by sqlite
+        self.assertIn("jsonl-only-session.jsonl", kept_jsonl)      # not in the DB
+        self.assertIn("sub-explore-1.jsonl", kept_jsonl)           # sidechain, always kept
+        self.assertEqual(twins.get("demo-session", {}).get("cwd"), "/Users/demo/cursorproj")
+
+    def test_cursor_sqlite_events_carry_timestamps_and_cwd(self):
+        db = SRC_DIRS["CURSOR_DB"]
+        events = list(paxel._cursor_sqlite_events(
+            db, {"demo-session": {"cwd": "/Users/demo/cursorproj"}}))
+        prompts = [e for e in events if e.get("type") == "user"
+                   and isinstance(e.get("message", {}).get("content"), str)]
+        texts = [e["message"]["content"] for e in prompts]
+        self.assertIn("legacy sqlite-only question thanks", texts)
+        self.assertIn("duplicate prompt should not count", texts)  # canonical copy now
+        demo = [e for e in events if e.get("sessionId") == "demo-session"]
+        self.assertTrue(all(e.get("cwd") == "/Users/demo/cursorproj" for e in demo))
+        self.assertTrue(any(e.get("timestamp") for e in demo))
+        # tool statuses: one error, one cancelled (cancelled must NOT count as an error)
+        results = [b for e in events if e.get("sessionId") == "demo-session"
+                   for b in (e.get("message", {}).get("content") or [])
+                   if isinstance(b, dict) and b.get("type") == "tool_result"]
+        self.assertEqual(sum(1 for b in results if b.get("is_error")), 1)
+
+    def test_cursor_sqlite_edit_churn_backfilled_from_jsonl_twin(self):
+        # Real edit_file_v2 sqlite params carry only the file PATH — the old/new strings
+        # exist only in the JSONL twin, so churn must be backfilled from it.
+        jsonl = os.path.join(SRC_DIRS["CURSOR_DIR"], "Users-demo-cursorproj",
+                             "agent-transcripts", "demo-session", "demo-session.jsonl")
+        events = list(paxel._cursor_sqlite_events(
+            SRC_DIRS["CURSOR_DB"],
+            {"demo-session": {"cwd": "/Users/demo/cursorproj", "jsonl": jsonl}}))
+        edits = [b for e in events if e.get("sessionId") == "demo-session"
+                 for b in (e.get("message", {}).get("content") or [])
+                 if isinstance(b, dict) and b.get("type") == "tool_use"
+                 and b.get("name") == "Edit"]
+        self.assertTrue(edits, "no Edit tool_use came out of the sqlite reader")
+        self.assertEqual(edits[0]["input"]["new_string"], "a = 2\nb = 3\n")
+        self.assertEqual(edits[0]["input"]["old_string"], "a = 1\n")
+        self.assertEqual(edits[0]["input"]["file_path"], "/Users/demo/cursorproj/main.py")
 
     def test_compute_scores_has_three_axes_not_steering(self):
         # empty-data guard returns the canonical axis set — guards against re-adding Steering.
