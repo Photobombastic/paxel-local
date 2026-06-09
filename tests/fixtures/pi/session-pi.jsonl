@@ -1,0 +1,7 @@
+{"type":"session","id":"pi-demo-1","cwd":"/Users/demo/piproj"}
+{"type":"message","message":{"role":"user","content":"add a parser test","timestamp":1749477600000}}
+{"type":"message","message":{"role":"assistant","model":"pi-model-1","content":[{"type":"thinking","thinking":"consider the request, then edit and run tests"},{"type":"text","text":"On it."},{"type":"toolCall","name":"read","arguments":{"filePath":"/Users/demo/piproj/a.py"}},{"type":"toolCall","name":"edit","arguments":{"filePath":"/Users/demo/piproj/a.py","oldString":"x = 1","newString":"x = 1\ny = 2"}},{"type":"toolCall","name":"bash","arguments":{"command":"pytest -q"}}]}}
+{"type":"message","message":{"role":"toolResult","isError":false}}
+{"type":"message","message":{"role":"user","content":"why is this still failing","timestamp":1749477720000}}
+{"type":"message","message":{"role":"assistant","model":"pi-model-1","content":[{"type":"text","text":"Path issue — fixing."},{"type":"toolCall","name":"bash","arguments":{"command":"npm test"}}]}}
+{"type":"message","message":{"role":"toolResult","isError":true}}

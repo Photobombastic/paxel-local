@@ -1,0 +1,8 @@
+{"type":"session_meta","payload":{"id":"codex-demo-1","cwd":"/Users/demo/cdx"}}
+{"type":"response_item","timestamp":"2026-06-02T10:00:00Z","payload":{"type":"message","role":"user","content":"refactor the config loader to be lazy"}}
+{"type":"response_item","timestamp":"2026-06-02T10:00:02Z","payload":{"type":"reasoning","summary":"plan the lazy-load refactor before editing"}}
+{"type":"response_item","timestamp":"2026-06-02T10:00:03Z","payload":{"type":"message","role":"assistant","content":"Planning the change, then applying it."}}
+{"type":"response_item","timestamp":"2026-06-02T10:00:04Z","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"go test ./...\"}"}}
+{"type":"response_item","timestamp":"2026-06-02T10:00:05Z","payload":{"type":"function_call_output","output":{"success":true}}}
+{"type":"response_item","timestamp":"2026-06-02T10:00:06Z","payload":{"type":"function_call","name":"apply_patch","arguments":"{\"path\":\"config.go\",\"patch\":\"+ lazy init\\n+ return cached\"}"}}
+{"type":"response_item","timestamp":"2026-06-02T10:00:07Z","payload":{"type":"function_call_output","output":{"success":true}}}

@@ -216,3 +216,18 @@ Honest about what it can't see. If you can close one of these, open a PR:
   would be great contributions.
 
 Issues and pull requests welcome.
+
+### Tests
+
+There's a stdlib-only smoke harness (no pytest to install) — run it with:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+It points paxel at tiny committed transcripts under `tests/fixtures/<source>/`, runs the whole
+pipeline end-to-end per source, and asserts a valid profile comes out — plus a `node --check` of
+the embedded poster JS and a few invariant guards. **Adding a new source?** Drop a minimal fixture
+in `tests/fixtures/<your-source>/` matching its real on-disk layout, then add an entry for it to
+`SRC_DIRS` and `EXPECTED_SOURCES` in `tests/test_smoke.py` — and it's covered. CI (GitHub Actions)
+runs all of this on every PR.
