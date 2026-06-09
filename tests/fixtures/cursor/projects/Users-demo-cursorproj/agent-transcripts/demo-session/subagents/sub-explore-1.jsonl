@@ -1,0 +1,3 @@
+{"role": "user", "message": {"content": [{"type": "text", "text": "Explore the repo structure and report back."}]}}
+{"role": "assistant", "message": {"content": [{"type": "tool_use", "name": "Grep", "input": {"pattern": "def main"}}]}}
+{"type": "turn_ended", "status": "success"}

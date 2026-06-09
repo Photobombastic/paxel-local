@@ -127,7 +127,7 @@ Auto-detected and parsed (all reads local):
 | **Gemini CLI** | `~/.gemini/tmp` | full |
 | **Pi** | `~/.pi/agent/sessions` | full |
 | **opencode** | `~/.local/share/opencode/storage` | full |
-| Cursor | `…/Cursor/.../state.vscdb` | detected, experimental (SQLite blobs — not yet parsed) |
+| **Cursor** | `state.vscdb` + `~/.cursor/projects/.../agent-transcripts` | full (SQLite-first + JSONL, deduped) |
 
 Non-Claude formats are translated into a common event shape so every metric works across
 tools (Claude/Pi-specific signals like skills/subagents/thinking are naturally richer).
@@ -180,9 +180,12 @@ brute-forcing.
 
 ## Scope decisions
 
-- **Multi-source** (Claude Code, Codex, Gemini, Pi, opencode), with per-source selection via args.
-  Cursor is a SQLite blob store that still needs real reverse-engineering — detected and
-  flagged, not faked.
+- **Multi-source** (Claude Code, Codex, Gemini, Pi, opencode, Cursor), with per-source selection via args.
+  Cursor sessions live in BOTH `state.vscdb` (SQLite) and agent-transcripts JSONL with
+  complementary data; the SQLite copy is the event stream (it carries per-event timestamps and
+  tool error statuses the JSONL lacks), while the JSONL twin backfills what the DB omits: the
+  workspace path (from the project folder slug) and the edit old/new strings that drive tool
+  churn. JSONL stands alone for sessions missing from the DB and for subagent sidechains.
 - **One-shot.** Just re-run to rebuild as sessions accumulate.
 
 ## Notable implementation details (faithfulness)
@@ -206,8 +209,13 @@ Honest about what it can't see. If you can close one of these, open a PR:
   content never appears in the transcript, so the shell-authored estimate misses it. Git churn
   catches it *if* it was committed in a repo still on disk.
 - **`~/.claude/history.jsonl`** (a separate flat prompt log) isn't parsed yet.
-- **Cursor** (SQLite `state.vscdb` blobs) is detected but not yet parsed — reverse-engineering it
-  into the common event shape is a great first PR.
+- **Cursor workspace slugs** — project `cwd` is reconstructed from the folder slug
+  (`Users-you-dev-foo` → `/Users/you/dev/foo`); usernames or paths with dashes may mis-parse.
+- **Cursor JSONL carries no timestamps, models, or tool error statuses** — sessions also present
+  in `state.vscdb` use the richer SQLite copy; JSONL-only sessions get a single file-mtime
+  timestamp (so they land on the calendar without faking an hour-by-hour history).
+- **Cursor `ApplyPatch` churn** counts raw patch lines (like Codex `apply_patch`), so it
+  slightly over-estimates; git churn is unaffected.
 - **Codex tool churn** from `apply_patch` counts raw patch lines (diff markers included), so it
   over-estimates; the gold-standard git churn is unaffected.
 - **Score grounding** — axis *criteria* are derived from gstack, but the **archetype** picker
