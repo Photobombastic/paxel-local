@@ -80,7 +80,7 @@ honestly measure from transcripts:
 |---|---|---|
 | **Execution** | Shipped output at AI leverage — committed-code rate (coverage-corrected, ≤1.4×, disclosed in `report.md`), **fidelity** (how much of what you generate actually lands in git), and delegation/parallelism | gstack's **Build** phase + the "Golden Age" ethos (one builder shipping like a team) |
 | **Planning** | Think-before-build — exploring before writing, prompt sophistication, reasoning depth, and plan/spec ceremony | gstack's **Think + Plan** phases + "Search Before Building" |
-| **Steering** | Hands-on direction — short agent chains, how often the agent checks in with you, and review/careful discipline | "**User Sovereignty**" + the **Review** gate (experts stay hands-on) |
+| **Steering** | Does the agent do what you intend — by either route: staying hands-on (short chains, frequent check-ins) **or** directing a clean autonomous run (heavy delegation with a low error rate). Scored as the better of the two, so running a working software-factory counts as control, not its absence | "**User Sovereignty**" — *whichever way* you keep the agent on-intent |
 | **Engineering** | Craft & low rework — getting files right early, little file-thrash, low error rate, and review/test/investigate discipline | "**Boil the Lake**" + the **Review / Test / Reflect** stages |
 
 **Signature moves** (`signature_moves`) and the **growth edge** (`growth_edges`) are the same idea applied
@@ -93,10 +93,12 @@ How the criteria were built: one subagent per axis read the real gstack role/ski
 and the ethos, derived that axis's notion of "good," then mapped it onto paxel's available metrics —
 and a later round of gstack-skill audits hardened it (above). Every term is transparent, clamped 0–1
 against a justified target, and weighted to sum to 1.0 — read `compute_scores` in `paxel.py`; nothing
-is hidden. Honest limits we don't paper over: paxel can't see test *coverage* from transcripts (so
-"completeness" is proxied by quality-ceremony use + low rework); the git-vs-tool fidelity signal is
-noisier when git only sees some of your repos; and Engineering's iteration signals only see `Edit`/`Write`
-work, not files you rewrite purely through the shell. Scores are an opinion; the counts underneath are fact.
+is hidden. Honest limits we don't paper over: paxel can't see test *coverage* from transcripts —
+it detects test **runs** (named test skills **and** shell runners like `pytest` / `go test` /
+`npm test`), so if you test some other way it can't see, the growth edge says so rather than claiming
+"0 tests"; the git-vs-tool fidelity signal is noisier when git only sees some of your repos; and
+Engineering's iteration signals only see `Edit`/`Write` work, not files you rewrite purely through the
+shell. Scores are an opinion; the counts underneath are fact.
 
 ## Sources
 

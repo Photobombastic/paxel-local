@@ -133,6 +133,31 @@ def bash_writes_file(cmd):
                 or re.search(r'\btee\s+(?![>|])', cmd))   # tee to a file, not a process sub
 
 
+# A Bash command that RUNS A TEST SUITE — so a builder who does TDD through the shell
+# (pytest / go test / npm test …) isn't read as "0 test runs" just because they don't use a
+# named gstack test-skill. Critical fix: skill-name-only detection was blind to CLI testing,
+# the single most common way people actually test. Matches the runner invocation, not the
+# bare word "test" (so it won't fire on "latest" or "git request").
+_SHELL_TEST_RE = re.compile(
+    r'(?:^|[\s;&|(])('
+    r'pytest|py\.test|tox|nox|nosetests?|unittest\b|coverage\s+run|hypothesis'
+    r'|jest|vitest|mocha|jasmine|ava\b|cypress|playwright\s+test|wtr|web-test-runner|karma'
+    r'|go\s+test|gotestsum|cargo\s+test|cargo\s+nextest'
+    r'|rspec|minitest|rails\s+test|bin/rails\s+test'
+    r'|phpunit|pest\b'
+    r'|ctest|gtest|catch2'
+    r'|\./gradlew\s+(?:test|check)|gradle\s+(?:test|check)|mvn\s+(?:test|verify)'
+    r'|dotnet\s+test|xunit|nunit'
+    r'|(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?test\b'
+    r'|rake\s+(?:test|spec)|make\s+(?:test|check)'
+    r'|bazel\s+test|elixir\s+test|mix\s+test|swift\s+test|flutter\s+test|deno\s+test'
+    r')', re.I)
+
+
+def bash_runs_tests(cmd):
+    return bool(_SHELL_TEST_RE.search(cmd or ""))
+
+
 def _git(cwd, args, timeout=30):
     """Run a git command locally; return stdout or '' on any failure. Never raises."""
     try:
@@ -594,6 +619,7 @@ def main():
 
     bash_write_calls = 0       # Bash calls that write/modify a file
     bash_authored_lines = 0    # newlines inside those commands (shell-authored content estimate)
+    shell_test_runs = 0        # Bash calls that run a test suite (pytest/go test/npm test/…) — CLI TDD
 
     hour_hist = Counter()          # local hour 0-23
     weekday_hist = Counter()       # 0=Mon..6=Sun
@@ -813,6 +839,8 @@ def main():
                                     if bash_writes_file(cmd):
                                         bash_write_calls += 1
                                         bash_authored_lines += cmd.count("\n")
+                                    if bash_runs_tests(cmd):
+                                        shell_test_runs += 1
                                     if "git commit" in cmd:
                                         git_commits += 1
                                         # flush iteration-depth run for this session
@@ -989,6 +1017,7 @@ def main():
             "questions_asked": questions_asked,
             "background_tasks": background_tasks,
             "scheduled_actions": scheduled_actions,
+            "shell_test_runs": shell_test_runs,
         },
         "rhythm": {
             "hour_histogram_local": {str(h): hour_hist.get(h, 0) for h in range(24)},
@@ -1218,8 +1247,9 @@ SCORE_NOTES = {
                  "you generate actually lands in git, and how hard you delegate to agents.",
     "Planning": "How much you think before you build — exploring before writing, structured "
                 "prompts, reasoning depth, and laying out a plan first.",
-    "Steering": "How hands-on you stay — short agent chains and frequent check-ins, "
-                "rather than pointing the agent and letting it run unchecked.",
+    "Steering": "How well the agent does what you intend — whether you stay hands-on (short "
+                "chains, frequent check-ins) or direct a clean autonomous run you delegate and "
+                "trust. Hands-off isn't penalized when the output comes back working.",
     "Engineering": "How clean your work is — getting files right early, not re-editing the same "
                    "one over and over, low error rate, and checking your work.",
 }
@@ -1229,7 +1259,7 @@ SCORE_NOTES = {
 SCORE_NOTES_SHORT = {
     "Execution": "Shipped output, at AI leverage",
     "Planning": "Think before you build",
-    "Steering": "Hands-on direction of the agent",
+    "Steering": "Getting the agent to do what you intend",
     "Engineering": "Craft, with little rework",
 }
 
@@ -1346,13 +1376,22 @@ def compute_scores(stats):
         + 0.20 * _clamp((v["thinking_blocks"] / sess) / 12.0)           # reasoning depth per session
         + 0.20 * _clamp((plan_skills / sess) / 0.8))                     # plan/spec ceremony, session-normalized, de-weighted
 
-    # STEERING — User Sovereignty: how much the human stays in control. PURELY BEHAVIORAL
-    # (no skill-detection — review/qa are craft, they live in Engineering): owns
-    # actions_per_prompt (hands-on cadence) and questions_asked (how often the agent stopped
-    # to ask YOU — low = you let it run). p90 was removed (it's Engineering's only).
-    steering = 10 * (
-        0.55 * _ev(_clamp((15 - b["actions_per_prompt"]) / 11), ev)      # hands-on cadence: fewer agent actions per prompt = more in the loop
-        + 0.45 * _clamp((b["questions_asked"] / prompts) / 0.05))        # how often the agent checked in with you (per prompt)
+    # STEERING — does the agent do what you INTEND? Two legitimate routes, scored as the BETTER
+    # of the two so neither style is punished:
+    #   (a) HANDS-ON: short agent chains + frequent check-ins — you stay in the loop turn by turn.
+    #   (b) AUTONOMOUS COMMAND: an expert who architects, delegates, and gets CLEAN output back is
+    #       steering too — running a working factory is control, not the absence of it. Credit
+    #       heavy delegation that yields a low error rate.
+    # Why (b) exists: the old purely-hands-on formula floored a deliberate autonomous builder
+    # (long chains + few check-ins BY DESIGN) at ~1.0 and then told them to "interrupt more" —
+    # exactly backwards for a software-factory operator. max() means route (b) only ever LIFTS a
+    # demonstrably-working factory; it never lowers a hands-on builder's score. (error_rate also
+    # feeds Engineering; a mild overlap is the right call vs. shaming autonomy.)
+    steer_handson = (0.55 * _ev(_clamp((15 - b["actions_per_prompt"]) / 11), ev)   # hands-on cadence
+                     + 0.45 * _clamp((b["questions_asked"] / prompts) / 0.05))      # agent checks in with you
+    steer_command = (_clamp((b["delegate_actions"] + b["background_tasks"]) / max(prompts * 0.5, 1))  # you delegate heavily
+                     * _ev(1 - _clamp(b["error_rate_per_100_tools"] / 8), ev))      # …and it comes back clean
+    steering = 10 * max(steer_handson, steer_command)
 
     # ENGINEERING — craft / low rework. The old churn_back term (deletion ratio) was CUT:
     # it scored a clean refactor as "thrash" and gave a perfect score to anyone who never
@@ -1361,7 +1400,8 @@ def compute_scores(stats):
     # "code-review" (not bare "review") so this doesn't greedily match Planning's
     # plan-eng-review / plan-design-review / ceo-review ceremonies (which live in plan_skills).
     eng_skills = _skill_uses_any(stats, ("code-review", "test", "tdd", "qa", "investigate",
-                                         "retro", "learn", "cso", "karpathy", "debug"))
+                                         "retro", "learn", "cso", "karpathy", "debug")) \
+        + b.get("shell_test_runs", 0)   # CLI tests (pytest/go test/…) count as quality work too
     engineering = 10 * (
         0.30 * _ev(1 - _clamp((b["iteration_depth_mean"] - 2) / 8), ev)  # low rework: got files right early
         + 0.25 * _ev(1 - _clamp((b["iteration_depth_p90"] - 3) / 9), ev)  # clean iteration: low typical depth
@@ -1494,33 +1534,49 @@ def growth_edges(stats, scores):
     lowest = min(scores, key=scores.get) if scores else ""
     qrate = b["questions_asked"] / prompts
     rev = sk("review", "code-review")
-    tdd = sk("test", "tdd", "qa")
+    tdd = sk("test", "tdd", "qa") + b.get("shell_test_runs", 0)   # named test skills + CLI test runs
+    deleg = b["delegate_actions"] + b["background_tasks"]
+    err = b["error_rate_per_100_tools"]
+    # A WORKING autonomous factory — heavy delegation that comes back clean — is steering by a
+    # different mechanism (architect → delegate → review), not a lack of control. Don't hand its
+    # operator hands-on-babysitting advice. (The Chris-Sells case: "building a software factory,
+    # not babysitting agents.")
+    factory = deleg >= prompts * 0.3 and err < 6
     pool = []   # (priority: lower = more urgent / shows first, eyebrow, title, advice_html)
 
-    # Gate on the Steering SCORE (not question-rate alone) so a high-Steering user who
-    # simply steers via short commands is never told to "steer harder."
-    if scores.get("Steering", 10) < 7:
+    # Suppressed for a working factory; otherwise framed as a STYLE to try, not a failing — and
+    # it explicitly defers to your own outcomes ("if your runs come back clean, ignore this").
+    if scores.get("Steering", 10) < 7 and not factory:
         lead = (f'Steering is your lowest axis at <b>{scores.get("Steering", "?")}</b>'
                 if lowest == "Steering" else f'Steering sits at <b>{scores.get("Steering", "?")}</b>')
         pool.append((1.0, "Steer harder",
-            "Interrupt during, not just review after",
-            f'{lead} — the agent stopped to check with you on only <b>{qrate*100:.0f}%</b> of prompts, '
-            f'so it mostly ran without your input. '
-            f'Break in on risky steps and redirect long chains <i>while</i> they run, instead of only '
-            f'reviewing after. (gstack calls this <code>/careful</code>.)'))
+            "Try interrupting during, not just reviewing after",
+            f'{lead} — the agent checked in on only <b>{qrate*100:.0f}%</b> of prompts and your chains run '
+            f'long. If your autonomous runs already come back clean, ignore this; if they sometimes drift, '
+            f'breaking in on risky steps <i>while</i> they run catches it earlier than a review after. '
+            f'(gstack calls this <code>/careful</code>.)'))
 
+    # Only fires when we genuinely see few tests — and it SAYS what it can and can't detect, so a
+    # CLI tester is never told "0 test runs" as though it were fact.
     if rev >= 50 and tdd < max(rev * 0.1, 5):
         pool.append((1.5, "Add a reflex",
             "Pair your review reflex with a test reflex",
-            f'<b>{rev:,}</b> code-reviews vs <b>{tdd}</b> test runs. Make the double-check a <i>regression '
-            f'test</i>: write one for every bug you fix before you move on. (gstack\'s <code>/qa</code> does this automatically.)'))
+            f'We spotted <b>{rev:,}</b> code-reviews but only <b>{tdd}</b> test runs — counting named test '
+            f'skills <i>and</i> shell runners like <code>pytest</code> / <code>go test</code> / '
+            f'<code>npm test</code>. If you test some other way we can\'t see, skip this. If tests really '
+            f'are thin, make the double-check a <i>regression test</i>: one for every bug you fix. '
+            f'(gstack\'s <code>/qa</code> does this.)'))
 
-    if b["iteration_depth_max"] >= 40 or b["files_hammered_over_15x"] >= 10:
+    # High iteration is only "whack-a-mole" if it's THRASH — so we require an elevated error rate
+    # alongside it. A clean deep-iterator (low errors, or an agent doing the iterating) is doing
+    # deliberate work, not flailing, and is left alone.
+    if (b["iteration_depth_max"] >= 40 or b["files_hammered_over_15x"] >= 10) and err >= 5:
         pool.append((2.0, "Stop the grind",
-            "Root-cause instead of whack-a-mole",
-            f'<b>{b["iteration_depth_max"]}×</b> on one file, <b>{b["files_hammered_over_15x"]}</b> files past '
-            f'15 edits. When a file resists past ~15 tries, stop and find the root cause before the next edit '
-            f'instead of retrying. (gstack names this discipline <code>/investigate</code> — no fixes without investigation.)'))
+            "When a file fights back, root-cause it",
+            f'<b>{b["iteration_depth_max"]}×</b> on one file and <b>{b["files_hammered_over_15x"]}</b> files '
+            f'past 15 edits, next to ~<b>{err}</b> errors per 100 tool calls — that pairing reads as '
+            f'retry-thrash more than deliberate iteration. When a file resists past ~15 tries, find the root '
+            f'cause before the next edit. (gstack names this <code>/investigate</code>.)'))
 
     if scores.get("Planning", 10) < 6:
         pool.append((scores.get("Planning", 10), "Plan first",
@@ -1900,7 +1956,7 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
       'var t=b.getAttribute("data-target"),arr=QUOTES[t];if(!arr||arr.length<2)return;'
       'QIDX[t]=((QIDX[t]||0)+1)%arr.length;var el=document.getElementById("q-"+t);'
       'if(el)el.textContent="\\u201c"+arr[QIDX[t]]+"\\u201d";});});')
-    P(f'var repo={_js(REPO_URL)};var caption={_js(caption)};')
+    P(f'var caption={_js(caption)};')
     P('var x=document.getElementById("share-x");if(x)x.href="https://x.com/intent/tweet?text="+encodeURIComponent(caption);')
     P('var cb=document.getElementById("share-copy");if(cb)cb.addEventListener("click",function(){'
       'var d=function(){var o=cb.textContent;cb.textContent="✓ Copied";setTimeout(function(){cb.textContent=o;},1500);};'
@@ -1911,6 +1967,7 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     P(r'''var ib=document.getElementById("share-img");
 if(ib)ib.addEventListener("click",function(){
   try{
+    if(typeof HTMLCanvasElement==="undefined"||!HTMLCanvasElement.prototype.toBlob){alert("Image export isn't supported in this browser — try a screenshot.");return;}
     var W=1200,M=48,s=3,IW=W-2*M;   // 3x supersample so the logo art stays crisp when zoomed/retina
     var beak="#ED7379",beakD="#D14E57",slate="#313941",mut="#5e6a73",line="#dfe3e7",track="#dde2e6";
     function L(c,t,mw){var ws=String(t).split(" "),ln="",o=[];for(var i=0;i<ws.length;i++){var tn=ln?ln+" "+ws[i]:ws[i];if(c.measureText(tn).width>mw&&ln){o.push(ln);ln=ws[i];}else ln=tn;}o.push(ln);return o;}
@@ -1947,10 +2004,11 @@ if(ib)ib.addEventListener("click",function(){
     var heroY=96,archB=heroY+12+Math.round(afs*0.74),tagY=archB+40,tagLH=33,ctxY=tagY+(tll.length-1)*tagLH+30,scY=ctxY+42,scH=348,scEnd=scY+scH;
     var gridY=scEnd+30,gc=4,rows=Math.ceil(cards.length/gc),cardH=184,gapY=22;
     var gridEnd=rows>0?gridY+rows*cardH+(rows-1)*gapY:scEnd,footerY=gridEnd+44,H=footerY+34;
+    while(s>1&&(W*s*H*s>16700000||H*s>4096))s--;   // iOS canvas-area/max-dim guard: degrade to a lower-res image rather than a silently-blank one
     var cv=document.createElement("canvas");cv.width=W*s;cv.height=H*s;
     var c=cv.getContext("2d");c.scale(s,s);c.textBaseline="alphabetic";c.textAlign="left";
     c.imageSmoothingEnabled=true;c.imageSmoothingQuality="high";   // proper resample of the logo, not a cheap box filter
-    function finish(){cv.toBlob(function(bl){if(!bl){alert("Image export failed — try a screenshot.");return;}var a=document.createElement("a");a.href=URL.createObjectURL(bl);a.download="builder-profile.png";a.click();});}
+    function finish(){cv.toBlob(function(bl){if(!bl){alert("Image export failed — try a screenshot.");return;}var u=URL.createObjectURL(bl);var a=document.createElement("a");a.href=u;a.download="builder-profile.png";a.click();setTimeout(function(){URL.revokeObjectURL(u);},4000);});}
     c.fillStyle="#edeff2";c.fillRect(0,0,W,H);c.fillStyle=beak;c.fillRect(0,0,W,8);
     var bx0=CARD.logo?M+76:M;
     c.fillStyle=slate;c.font="700 26px -apple-system,sans-serif";c.fillText("Roadmap",bx0,64);
