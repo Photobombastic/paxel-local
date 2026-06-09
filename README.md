@@ -223,7 +223,22 @@ Honest about what it can't see. If you can close one of these, open a PR:
   pass. Sharper targets, or mapping archetypes onto gstack's roles (CEO / Eng Manager / QA Lead / …),
   would be great contributions.
 
-Issues and pull requests welcome.
+Issues and pull requests welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** — it splits the work
+into *more sources & signals* (great first PRs) and the harder, more interesting one below.
+
+### Want to improve the *algorithm*? (the honest hard problem)
+
+Adding a source is mechanical; changing **what gets measured** is not. paxel reads usage **style
+and volume, not skill** — several axes can run *opposite* to seniority (experts prompt terser, ship
+cleaner, lean on the agent harder). We've already shipped and killed real scoring bugs: a term that
+gave a spammer a 9.4, and a "Steering" axis that scored a 30-year engineer 1/10 for being hands-off.
+
+So scoring changes are held to an **adversarial suite** (`tests/test_scoring_invariants.py`): ten
+invariants — a spammer must not out-score a shipper, raw volume must not inflate a score, verbosity
+must not buy "Planning," being hands-off must never cost points — each a frozen memory of a bug.
+Think a score is wrong? Don't just reweight a coefficient: **add an adversarial profile that encodes
+what *should* be true and show the current math violates it.** Rules of engagement in
+[CONTRIBUTING.md](CONTRIBUTING.md#tier-2--changing-what-gets-measured-the-hard-interesting-one).
 
 ### Tests
 
@@ -239,3 +254,7 @@ the embedded poster JS and a few invariant guards. **Adding a new source?** Drop
 in `tests/fixtures/<your-source>/` matching its real on-disk layout, then add an entry for it to
 `SRC_DIRS` and `EXPECTED_SOURCES` in `tests/test_smoke.py` — and it's covered. CI (GitHub Actions)
 runs all of this on every PR.
+
+Scoring is guarded separately by `tests/test_scoring_invariants.py` — ten adversarial invariants
+(built from the synthetic profiles in `tests/adversarial_profiles.py`) that any change to
+`compute_scores` must keep green. See [CONTRIBUTING.md](CONTRIBUTING.md) before touching the math.
