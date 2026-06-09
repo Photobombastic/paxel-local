@@ -13,3 +13,6 @@ HANDOFF.md
 # Python
 __pycache__/
 *.pyc
+
+# Release build artifact (self-contained single-file paxel.py — built by scripts/build_release.py)
+dist/
