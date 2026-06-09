@@ -55,6 +55,13 @@ Claude/GPT and it'll write you a deeper profile locally. That's optional; the HT
 
 ## How scores are graded — grounded in gstack, not an arbitrary scale
 
+> **Read this first — what the scores are and aren't.** These axes measure **how you work with AI
+> (your style and volume), not how good an engineer you are.** Some signals run *opposite* to
+> seniority: a veteran who writes less code, gives terser prompts, or runs agents autonomously can
+> score **below** a high-volume beginner. (That's a real result, not a hypothetical — it's why we
+> dropped the prompt-length term and reframed the scale.) Treat this as a profile of your *habits*,
+> not a skill or seniority ranking. **Numbers = fact, scores = style, neither = seniority.**
+
 The four axes aren't a rubric we invented in a vacuum. Each one is **derived from
 [Garry Tan's gstack](https://github.com/garrytan/gstack)** — his open-source framework that turns
 Claude Code into a virtual engineering team. gstack and YC's Paxel both come out of Garry-Tan-world,

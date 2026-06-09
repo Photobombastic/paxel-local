@@ -1245,8 +1245,9 @@ REPO_URL = "https://github.com/Photobombastic/paxel-local"
 SCORE_NOTES = {
     "Execution": "How much you ship, and how fast — your committed-code rate, how much of what "
                  "you generate actually lands in git, and how hard you delegate to agents.",
-    "Planning": "How much you think before you build — exploring before writing, structured "
-                "prompts, reasoning depth, and laying out a plan first.",
+    "Planning": "How much you think before you build — exploring before writing, reasoning "
+                "depth, and laying out a plan first. (Prompt length was dropped — terse expert "
+                "prompts shouldn't score below verbose ones.)",
     "Steering": "How hands-on you stay — short agent chains and frequent check-ins. A LOW score "
                 "means you work hands-off, not that you're out of control: directing a clean "
                 "autonomous run is steering too, we just can't score that from transcripts yet "
@@ -1365,17 +1366,18 @@ def compute_scores(stats):
         + 0.25 * _clamp(fidelity / 0.5)                                   # ship-vs-generate fidelity (committed / generated)
         + 0.35 * _clamp((b["delegate_actions"] + b["background_tasks"]) / max(prompts * 0.3, 1)))  # delegation/parallelism
 
-    # PLANNING — think before you build. Behavior-led (the duplicate explore-ratio term the
-    # audit flagged is gone — planning_ratio already captures it); prompt sophistication
-    # raised (the audit's "most honest proxy for the human's thinking"); skill term de-weighted.
+    # PLANNING — think before you build. Behavior-led.
+    # DROPPED the avg_prompt_length term (was 0.25): it is experience-INVERTING — expertise
+    # produces TERSER, more precise prompts, so the term paid for verbosity. It's the main reason a
+    # 4-month vibe-coder maxed Planning over a 30-year engineer (an expert-elicitation validity
+    # review caught this). Weight redistributed to the construct-relevant terms.
     plan_skills = _skill_uses_any(stats, ("brainstorm", "writing-plan", "plan", "spec",
                                           "office-hours", "autoplan", "grill", "ceo-review",
                                           "eng-review", "design-review"))
     planning = 10 * (
-        0.35 * _clamp(b["planning_ratio_explore_to_doing"] / 0.65)        # explore-before-build (behavioral)
-        + 0.25 * _clamp(v["avg_prompt_length_chars"] / 600.0)            # prompt sophistication — the human's thinking
-        + 0.20 * _clamp((v["thinking_blocks"] / sess) / 12.0)           # reasoning depth per session
-        + 0.20 * _clamp((plan_skills / sess) / 0.8))                     # plan/spec ceremony, session-normalized, de-weighted
+        0.45 * _clamp(b["planning_ratio_explore_to_doing"] / 0.65)        # explore-before-build (behavioral)
+        + 0.30 * _clamp((v["thinking_blocks"] / sess) / 12.0)           # reasoning depth per session
+        + 0.25 * _clamp((plan_skills / sess) / 0.8))                     # plan/spec ceremony (toolchain-biased → kept lowest)
 
     # STEERING — hands-on cadence: short agent chains + how often the agent stopped to ask YOU.
     # HONEST SCOPE (learned the hard way, see git history): this measures hands-on-ness ONLY. A
@@ -1887,10 +1889,14 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
       '<button id="share-copy" class="btn ghost" type="button">📋 Copy caption</button>'
       '<button id="share-img" class="btn ghost" type="button">🖼 Download image</button></div>')
     P('</section><h2 class="section">Your scorecard</h2>')
-    P('<div class="disclaimer"><b>How to read this.</b> The <b>counts are measured</b> from your real sessions — '
-      'reproducible, not guessed. The <b>0–10 scores are an opinion</b>: a transparent rubric grounded in '
-      '<a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">Garry Tan\'s gstack</a>, '
-      'not a copy of Paxel\'s closed algorithm. Short version: <b>numbers = fact, scores = opinion.</b></div>')
+    P('<div class="disclaimer"><b>How to read this.</b> These axes measure <b>how you work with AI — your '
+      'style and volume — not how good an engineer you are.</b> The <b>counts are measured</b> from your real '
+      'sessions (fact); the <b>0–10s are an opinion about style</b>, grounded in '
+      '<a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">gstack</a>, not a copy of '
+      'Paxel\'s closed algorithm. Some signals even run <b>opposite to seniority</b> — a veteran who writes '
+      'less code, gives terser prompts, or runs agents autonomously can score below a high-volume beginner. '
+      'So read it as a profile of your habits, not a skill ranking: <b>numbers = fact, scores = style, '
+      'neither = seniority.</b></div>')
     if _evidence(stats) < 0.5:   # < ~1000 tool calls: too thin to read habits confidently
         P(f'<div class="disclaimer" style="border-left-color:var(--muted)">⚠ <b>Limited data.</b> '
           f'Just {v["total_sessions"]} sessions and {v["tool_calls_total"]:,} tool calls here — not enough to read '
