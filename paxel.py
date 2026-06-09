@@ -139,19 +139,19 @@ def bash_writes_file(cmd):
 # the single most common way people actually test. Matches the runner invocation, not the
 # bare word "test" (so it won't fire on "latest" or "git request").
 _SHELL_TEST_RE = re.compile(
-    r'(?:^|[\s;&|(])('
-    r'pytest|py\.test|tox|nox|nosetests?|unittest\b|coverage\s+run|hypothesis'
-    r'|jest|vitest|mocha|jasmine|ava\b|cypress|playwright\s+test|wtr|web-test-runner|karma'
+    r'(?:^|[\s;&|(/])('          # start / separator / '/' → so ./venv/bin/pytest, node_modules/.bin/jest match
+    r'pytest|py\.test|tox|nox|nosetests?|unittest|coverage\s+run|hypothesis'
+    r'|jest|vitest|mocha|jasmine|ava|cypress|playwright\s+test|wtr|web-test-runner|karma'
     r'|go\s+test|gotestsum|cargo\s+test|cargo\s+nextest'
-    r'|rspec|minitest|rails\s+test|bin/rails\s+test'
-    r'|phpunit|pest\b'
+    r'|rspec|minitest|rails\s+test|phpunit|pest'
     r'|ctest|gtest|catch2'
     r'|\./gradlew\s+(?:test|check)|gradle\s+(?:test|check)|mvn\s+(?:test|verify)'
     r'|dotnet\s+test|xunit|nunit'
-    r'|(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?test\b'
+    r'|(?:npm|yarn|pnpm|bun)\s+(?:run\s+)?test'
     r'|rake\s+(?:test|spec)|make\s+(?:test|check)'
     r'|bazel\s+test|elixir\s+test|mix\s+test|swift\s+test|flutter\s+test|deno\s+test'
-    r')', re.I)
+    r'|hatch\s+run\s+test'
+    r')(?=$|[\s;&|):])', re.I)   # trailing guard kills ava.json / nox/ / tox.ini / *cache; ':' keeps npm test:unit
 
 
 def bash_runs_tests(cmd):
@@ -1247,9 +1247,10 @@ SCORE_NOTES = {
                  "you generate actually lands in git, and how hard you delegate to agents.",
     "Planning": "How much you think before you build — exploring before writing, structured "
                 "prompts, reasoning depth, and laying out a plan first.",
-    "Steering": "How well the agent does what you intend — whether you stay hands-on (short "
-                "chains, frequent check-ins) or direct a clean autonomous run you delegate and "
-                "trust. Hands-off isn't penalized when the output comes back working.",
+    "Steering": "How hands-on you stay — short agent chains and frequent check-ins. A LOW score "
+                "means you work hands-off, not that you're out of control: directing a clean "
+                "autonomous run is steering too, we just can't score that from transcripts yet "
+                "(it needs delegation→commit attribution — on the roadmap).",
     "Engineering": "How clean your work is — getting files right early, not re-editing the same "
                    "one over and over, low error rate, and checking your work.",
 }
@@ -1259,7 +1260,7 @@ SCORE_NOTES = {
 SCORE_NOTES_SHORT = {
     "Execution": "Shipped output, at AI leverage",
     "Planning": "Think before you build",
-    "Steering": "Getting the agent to do what you intend",
+    "Steering": "How hands-on you run it (low = hands-off, not bad)",
     "Engineering": "Craft, with little rework",
 }
 
@@ -1376,22 +1377,19 @@ def compute_scores(stats):
         + 0.20 * _clamp((v["thinking_blocks"] / sess) / 12.0)           # reasoning depth per session
         + 0.20 * _clamp((plan_skills / sess) / 0.8))                     # plan/spec ceremony, session-normalized, de-weighted
 
-    # STEERING — does the agent do what you INTEND? Two legitimate routes, scored as the BETTER
-    # of the two so neither style is punished:
-    #   (a) HANDS-ON: short agent chains + frequent check-ins — you stay in the loop turn by turn.
-    #   (b) AUTONOMOUS COMMAND: an expert who architects, delegates, and gets CLEAN output back is
-    #       steering too — running a working factory is control, not the absence of it. Credit
-    #       heavy delegation that yields a low error rate.
-    # Why (b) exists: the old purely-hands-on formula floored a deliberate autonomous builder
-    # (long chains + few check-ins BY DESIGN) at ~1.0 and then told them to "interrupt more" —
-    # exactly backwards for a software-factory operator. max() means route (b) only ever LIFTS a
-    # demonstrably-working factory; it never lowers a hands-on builder's score. (error_rate also
-    # feeds Engineering; a mild overlap is the right call vs. shaming autonomy.)
-    steer_handson = (0.55 * _ev(_clamp((15 - b["actions_per_prompt"]) / 11), ev)   # hands-on cadence
-                     + 0.45 * _clamp((b["questions_asked"] / prompts) / 0.05))      # agent checks in with you
-    steer_command = (_clamp((b["delegate_actions"] + b["background_tasks"]) / max(prompts * 0.5, 1))  # you delegate heavily
-                     * _ev(1 - _clamp(b["error_rate_per_100_tools"] / 8), ev))      # …and it comes back clean
-    steering = 10 * max(steer_handson, steer_command)
+    # STEERING — hands-on cadence: short agent chains + how often the agent stopped to ask YOU.
+    # HONEST SCOPE (learned the hard way, see git history): this measures hands-on-ness ONLY. A
+    # deliberate hands-off operator who delegates and gets clean autonomous output back is steering
+    # by a mechanism we CANNOT yet measure from transcripts — it needs delegation→survived-to-commit
+    # attribution, not a proxy. An earlier "autonomous command" term that credited delegation×low-error
+    # was reverted: it collapsed to error-rate-in-a-costume (the delegation half saturated), handed a
+    # trivial-subagent spammer a 9.4, was gameable via fire-and-forget background tasks, and
+    # double-counted error_rate into two axes. So: a LOW score here means "hands-off," NOT "out of
+    # control" — and the SCORE_NOTES + growth-edge copy say exactly that instead of prescribing
+    # babysitting. Crediting autonomy properly is on the roadmap as its own (reviewed) signal.
+    steering = 10 * (
+        0.55 * _ev(_clamp((15 - b["actions_per_prompt"]) / 11), ev)      # hands-on cadence
+        + 0.45 * _clamp((b["questions_asked"] / prompts) / 0.05))        # how often the agent checked in with you
 
     # ENGINEERING — craft / low rework. The old churn_back term (deletion ratio) was CUT:
     # it scored a clean refactor as "thrash" and gave a perfect score to anyone who never
@@ -1535,18 +1533,14 @@ def growth_edges(stats, scores):
     qrate = b["questions_asked"] / prompts
     rev = sk("review", "code-review")
     tdd = sk("test", "tdd", "qa") + b.get("shell_test_runs", 0)   # named test skills + CLI test runs
-    deleg = b["delegate_actions"] + b["background_tasks"]
     err = b["error_rate_per_100_tools"]
-    # A WORKING autonomous factory — heavy delegation that comes back clean — is steering by a
-    # different mechanism (architect → delegate → review), not a lack of control. Don't hand its
-    # operator hands-on-babysitting advice. (The Chris-Sells case: "building a software factory,
-    # not babysitting agents.")
-    factory = deleg >= prompts * 0.3 and err < 6
     pool = []   # (priority: lower = more urgent / shows first, eyebrow, title, advice_html)
 
-    # Suppressed for a working factory; otherwise framed as a STYLE to try, not a failing — and
-    # it explicitly defers to your own outcomes ("if your runs come back clean, ignore this").
-    if scores.get("Steering", 10) < 7 and not factory:
+    # NO hard factory-gate here: a prior `and not factory` version suppressed this edge for ERRORING
+    # delegators too (the people who most need it) and emptied the pool into a false "you're balanced."
+    # Instead the edge fires on a genuinely low Steering score and the copy SELF-DEFERS — a clean-running
+    # factory reads "ignore this," an erroring one reads "break in." The reader's own outcomes decide.
+    if scores.get("Steering", 10) < 7:
         lead = (f'Steering is your lowest axis at <b>{scores.get("Steering", "?")}</b>'
                 if lowest == "Steering" else f'Steering sits at <b>{scores.get("Steering", "?")}</b>')
         pool.append((1.0, "Steer harder",
@@ -1568,8 +1562,8 @@ def growth_edges(stats, scores):
             f'(gstack\'s <code>/qa</code> does this.)'))
 
     # High iteration is only "whack-a-mole" if it's THRASH — so we require an elevated error rate
-    # alongside it. A clean deep-iterator (low errors, or an agent doing the iterating) is doing
-    # deliberate work, not flailing, and is left alone.
+    # alongside it. A clean deep-iterator (low errors) is doing deliberate work, not flailing, and
+    # is left alone (this also spares agent-driven iteration, which tends to keep errors low).
     if (b["iteration_depth_max"] >= 40 or b["files_hammered_over_15x"] >= 10) and err >= 5:
         pool.append((2.0, "Stop the grind",
             "When a file fights back, root-cause it",
@@ -1594,11 +1588,20 @@ def growth_edges(stats, scores):
             f'(gstack\'s back half: <code>/review</code>, <code>/qa</code>, <code>/investigate</code>, <code>/retro</code>.)'))
 
     if not pool:
-        pool.append((9.0, "Go deeper",
-            "You're balanced — your edge is depth",
-            'You\'re even across the build sprint, so the next gear isn\'t a weak spot to patch — it\'s depth. '
-            'Add a short retro after each session and let the learnings compound session over session. '
-            '(gstack names this <code>/retro</code> — the Reflect stage.)'))
+        worst = min(scores, key=scores.get) if scores else ""
+        wv = scores.get(worst, 10)
+        if worst and wv < 6.5:
+            # Nothing specific fired, but an axis IS low — don't claim "balanced" when the scorecard
+            # shows otherwise. Point at the softest axis honestly instead.
+            pool.append((8.5, "Closest to an edge", f'Your softest axis is {worst}',
+                f'Nothing jumped out as a single clear next-step, but <b>{worst}</b> at <b>{wv}</b> is your '
+                f'lowest axis — the cheapest place to gain. See how {worst} is scored above and lean there.'))
+        else:
+            pool.append((9.0, "Go deeper",
+                "You're balanced — your edge is depth",
+                'You\'re even across the build sprint, so the next gear isn\'t a weak spot to patch — it\'s depth. '
+                'Add a short retro after each session and let the learnings compound session over session. '
+                '(gstack names this <code>/retro</code> — the Reflect stage.)'))
 
     pool.sort(key=lambda x: x[0])
     return [(eb, title, adv) for _, eb, title, adv in pool[:3]]

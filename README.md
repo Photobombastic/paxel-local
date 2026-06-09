@@ -80,7 +80,7 @@ honestly measure from transcripts:
 |---|---|---|
 | **Execution** | Shipped output at AI leverage — committed-code rate (coverage-corrected, ≤1.4×, disclosed in `report.md`), **fidelity** (how much of what you generate actually lands in git), and delegation/parallelism | gstack's **Build** phase + the "Golden Age" ethos (one builder shipping like a team) |
 | **Planning** | Think-before-build — exploring before writing, prompt sophistication, reasoning depth, and plan/spec ceremony | gstack's **Think + Plan** phases + "Search Before Building" |
-| **Steering** | Does the agent do what you intend — by either route: staying hands-on (short chains, frequent check-ins) **or** directing a clean autonomous run (heavy delegation with a low error rate). Scored as the better of the two, so running a working software-factory counts as control, not its absence | "**User Sovereignty**" — *whichever way* you keep the agent on-intent |
+| **Steering** | How hands-on you stay — short agent chains and how often the agent checks in with you. A low score means **hands-off, not out-of-control**: directing a clean autonomous run is steering too, but scoring *that* honestly needs delegation→commit attribution we don't yet measure (roadmap), so the axis note and the growth-edge copy say so plainly rather than prescribing "babysit more" | "**User Sovereignty**" — staying in the loop (hands-on cadence) |
 | **Engineering** | Craft & low rework — getting files right early, little file-thrash, low error rate, and review/test/investigate discipline | "**Boil the Lake**" + the **Review / Test / Reflect** stages |
 
 **Signature moves** (`signature_moves`) and the **growth edge** (`growth_edges`) are the same idea applied
