@@ -21,7 +21,8 @@ cd paxel-local && python3 paxel.py     # reads your local transcripts; opens you
 
 Clone, run, done — your profile pops open in the browser: an archetype, a gstack-grounded
 scorecard, your signature moves, and a one-click shareable poster like the one above. Nothing
-leaves the laptop. *(Example above uses fictional data.)*
+leaves the laptop. *(That poster up top is my own real profile — generated locally, public
+only because I chose to share it.)*
 
 ## Is this "exactly" Paxel?
 
