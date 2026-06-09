@@ -474,17 +474,19 @@ _RAGE_RE = re.compile(r'\b(wtf|wth|ffs|ugh+|argh+|seriously|literally|stop+|nope
                       r'stress\w*|overwhelm\w*|dying|exhaust\w*|help|no+\b|not\b)\b', re.I)
 
 
-def _crashout_score(text):
+def _crashout_score(text, hour=None):
     """How 'heated' a prompt reads — caps, exclamation pile-ups, ALLCAPS words, frustration
     words, and BREVITY (terse all-caps menace — 'NO STOP', 'SOMETHING IS WRONG' — is funnier
-    than a long rant). Pulls a REAL prompt, never invents one."""
+    than a long rant). A 2–6am prompt gets extra weight too: the witching-hour grind is its
+    own genre of crash-out. Pulls a REAL prompt, never invents one."""
     wc = len(text.split())
     caps = _caps_ratio(text)
     bangs = min(text.count("!") + text.count("?"), 5)
     allcaps = min(len(re.findall(r'\b[A-Z]{3,}\b', text)), 4)
     rage = min(len(_RAGE_RE.findall(text)), 3)
     brevity = max(0, 9 - wc) * 0.5
-    return caps * 2.5 + brevity + allcaps * 0.4 + rage * 0.5 + bangs * 0.3
+    witching = 1.8 if hour is not None and 2 <= hour < 6 else 0   # 2–6am: posted from the trenches
+    return caps * 2.5 + brevity + allcaps * 0.4 + rage * 0.5 + bangs * 0.3 + witching
 
 
 _FEELS_RE = re.compile(r'\b(worried|scared|nervous|anxious|stressed|exhausted|confused|'
@@ -733,7 +735,7 @@ def main():
                                         # gate: must read NEGATIVE (frustration word or !!-level
                                         # punctuation) — caps alone is excitement, not a crash-out
                                         if _RAGE_RE.search(cleaned) or _bangs >= 2:
-                                            _xsc = _crashout_score(cleaned)
+                                            _xsc = _crashout_score(cleaned, hour=dt.hour if dt else None)
                                             if _xsc >= 2.0:
                                                 crashout_cands.append((round(_xsc, 2), cleaned.strip()))
                                 if is_command:
@@ -1248,10 +1250,6 @@ SCORE_NOTES = {
     "Planning": "How much you think before you build — exploring before writing, reasoning "
                 "depth, and laying out a plan first. (Prompt length was dropped — terse expert "
                 "prompts shouldn't score below verbose ones.)",
-    "Steering": "How hands-on you stay — short agent chains and frequent check-ins. A LOW score "
-                "means you work hands-off, not that you're out of control: directing a clean "
-                "autonomous run is steering too, we just can't score that from transcripts yet "
-                "(it needs delegation→commit attribution — on the roadmap).",
     "Engineering": "How clean your work is — getting files right early, not re-editing the same "
                    "one over and over, low error rate, and checking your work.",
 }
@@ -1261,7 +1259,6 @@ SCORE_NOTES = {
 SCORE_NOTES_SHORT = {
     "Execution": "Shipped output, at AI leverage",
     "Planning": "Think before you build",
-    "Steering": "How hands-on you run it (low = hands-off, not bad)",
     "Engineering": "Craft, with little rework",
 }
 
@@ -1343,7 +1340,7 @@ def compute_scores(stats):
     v, b, vel = stats["volume"], stats["behavior"], stats["velocity"]
     if v["total_sessions"] == 0 or v["tool_calls_total"] == 0:
         # No real activity → don't manufacture a flattering "Quality Guardian 9.0"
-        return {"Execution": 0.0, "Planning": 0.0, "Steering": 0.0, "Engineering": 0.0}
+        return {"Execution": 0.0, "Planning": 0.0, "Engineering": 0.0}
     sess = max(v["total_sessions"], 1)
     prompts = max(v["total_prompts"], 1)
     hours = max(vel["active_hours"], 0.1)
@@ -1379,19 +1376,15 @@ def compute_scores(stats):
         + 0.30 * _clamp((v["thinking_blocks"] / sess) / 12.0)           # reasoning depth per session
         + 0.25 * _clamp((plan_skills / sess) / 0.8))                     # plan/spec ceremony (toolchain-biased → kept lowest)
 
-    # STEERING — hands-on cadence: short agent chains + how often the agent stopped to ask YOU.
-    # HONEST SCOPE (learned the hard way, see git history): this measures hands-on-ness ONLY. A
-    # deliberate hands-off operator who delegates and gets clean autonomous output back is steering
-    # by a mechanism we CANNOT yet measure from transcripts — it needs delegation→survived-to-commit
-    # attribution, not a proxy. An earlier "autonomous command" term that credited delegation×low-error
-    # was reverted: it collapsed to error-rate-in-a-costume (the delegation half saturated), handed a
-    # trivial-subagent spammer a 9.4, was gameable via fire-and-forget background tasks, and
-    # double-counted error_rate into two axes. So: a LOW score here means "hands-off," NOT "out of
-    # control" — and the SCORE_NOTES + growth-edge copy say exactly that instead of prescribing
-    # babysitting. Crediting autonomy properly is on the roadmap as its own (reviewed) signal.
-    steering = 10 * (
-        0.55 * _ev(_clamp((15 - b["actions_per_prompt"]) / 11), ev)      # hands-on cadence
-        + 0.45 * _clamp((b["questions_asked"] / prompts) / 0.05))        # how often the agent checked in with you
+    # STEERING IS NOT SCORED — it's DESCRIBED (see steering_reading). Hands-on cadence
+    # (actions/prompt + how often the agent checks in) is real and measurable, but it has no
+    # good/bad end: a deliberate hands-off operator who delegates and gets clean autonomous output
+    # back is steering by a mechanism we CANNOT read from transcripts (it needs delegation→
+    # survived-to-commit attribution). Grading it INVERTED the axis — `(15 - actions_per_prompt)`
+    # meant a more autonomous engineer scored LOWER (the Chris Sells case). You don't fix a
+    # backwards gauge with a disclaimer underneath it; you stop grading it and state the fact.
+    # (An earlier "autonomous command" term that tried to credit delegation×low-error was also
+    # reverted — it collapsed to error-rate-in-a-costume; see git history.)
 
     # ENGINEERING — craft / low rework. The old churn_back term (deletion ratio) was CUT:
     # it scored a clean refactor as "thrash" and gave a perfect score to anyone who never
@@ -1410,7 +1403,26 @@ def compute_scores(stats):
         + 0.10 * _ev(1 - _clamp(b["error_rate_per_100_tools"] / 10), ev))  # low error rate: root-cause discipline
 
     return {"Execution": round(execution, 1), "Planning": round(planning, 1),
-            "Steering": round(steering, 1), "Engineering": round(engineering, 1)}
+            "Engineering": round(engineering, 1)}
+
+
+def steering_reading(stats):
+    """Steering is DESCRIBED, not graded (see compute_scores for why). We report how you run
+    agents — long leash vs short leash — as a fact, with no implied good/bad. Returns a short
+    label + a one-line detail, both safe to render and to share (numbers only, no prompt text)."""
+    v, b = stats["volume"], stats["behavior"]
+    prompts = max(v["total_prompts"], 1)
+    apr = b["actions_per_prompt"]               # tool actions between your prompts
+    qrate = b["questions_asked"] / prompts      # how often the agent stopped to check in
+    if apr >= 12:
+        label, gloss = "Long leash", "you point the agent and let it run"
+    elif apr >= 6:
+        label, gloss = "Medium leash", "autonomous stretches, hands-on steering"
+    else:
+        label, gloss = "Short leash", "you stay close and course-correct often"
+    detail = (f'~{apr:.0f} actions per turn before you weigh in · '
+              f'the agent checked in on {qrate*100:.0f}% of your prompts')
+    return {"label": label, "gloss": gloss, "detail": detail}
 
 
 def pick_archetype(stats, scores):
@@ -1421,7 +1433,9 @@ def pick_archetype(stats, scores):
     plan_hi = scores.get("Planning", 0) >= 7.5
     exec_hi = scores.get("Execution", 0) >= 8
     eng_hi = scores.get("Engineering", 0) >= 7.5
-    steer_hi = scores.get("Steering", 0) >= 7.5
+    # Steering isn't scored anymore — read hands-on directly from cadence (short leash).
+    # "The Director" stays a positive, descriptive identity; there's no inverse-shaming pole.
+    steer_hi = b["actions_per_prompt"] <= 6
     # when both Execution and Engineering qualify, let the dominant one win the label
     exec_hi = exec_hi and scores.get("Execution", 0) >= scores.get("Engineering", 0)
     if plan_hi and brute:
@@ -1531,26 +1545,14 @@ def growth_edges(stats, scores):
     def sk(*needles):
         return sum(n for k, n in st.get("top_skills", []) if any(nd in k.lower() for nd in needles))
 
-    lowest = min(scores, key=scores.get) if scores else ""
-    qrate = b["questions_asked"] / prompts
     rev = sk("review", "code-review")
     tdd = sk("test", "tdd", "qa") + b.get("shell_test_runs", 0)   # named test skills + CLI test runs
     err = b["error_rate_per_100_tools"]
     pool = []   # (priority: lower = more urgent / shows first, eyebrow, title, advice_html)
 
-    # NO hard factory-gate here: a prior `and not factory` version suppressed this edge for ERRORING
-    # delegators too (the people who most need it) and emptied the pool into a false "you're balanced."
-    # Instead the edge fires on a genuinely low Steering score and the copy SELF-DEFERS — a clean-running
-    # factory reads "ignore this," an erroring one reads "break in." The reader's own outcomes decide.
-    if scores.get("Steering", 10) < 7:
-        lead = (f'Steering is your lowest axis at <b>{scores.get("Steering", "?")}</b>'
-                if lowest == "Steering" else f'Steering sits at <b>{scores.get("Steering", "?")}</b>')
-        pool.append((1.0, "Steer harder",
-            "Try interrupting during, not just reviewing after",
-            f'{lead} — the agent checked in on only <b>{qrate*100:.0f}%</b> of prompts and your chains run '
-            f'long. If your autonomous runs already come back clean, ignore this; if they sometimes drift, '
-            f'breaking in on risky steps <i>while</i> they run catches it earlier than a review after. '
-            f'(gstack calls this <code>/careful</code>.)'))
+    # NO steering edge: hands-on cadence has no good/bad end (it's described, not scored — see
+    # steering_reading), so telling an autonomous operator to "steer harder" is exactly the
+    # inversion we removed. We don't advise people to babysit clean autonomous runs.
 
     # Only fires when we genuinely see few tests — and it SAYS what it can and can't detect, so a
     # CLI tester is never told "0 test runs" as though it were fact.
@@ -1667,6 +1669,9 @@ _PROFILE_CSS = """<style>
   .score .track{display:block;height:12px;background:#dde2e6;border-radius:999px;overflow:hidden} .score .fill{display:block;height:100%;min-width:8px;background:linear-gradient(90deg,var(--beak-deep),var(--beak));border-radius:999px}
   .score .val{font-weight:800;text-align:right} .score .note{grid-column:1/-1;color:var(--muted);font-size:13px;margin:-6px 0 4px;padding-left:174px}
   @media(max-width:560px){.score .note{padding-left:0}}
+  .steerread{display:grid;grid-template-columns:160px 1fr;align-items:baseline;gap:14px;margin:4px 0 6px;padding-top:14px;border-top:1px solid var(--line)} .steerread .sr-k{font-weight:600;font-size:15px}
+  .steerread .sr-v{font-size:15px;color:#48535b} .steerread .sr-v b{color:var(--beak-deep);font-weight:700} .steerread .sr-d{grid-column:2;color:var(--muted);font-size:13px;margin-top:2px}
+  @media(max-width:560px){.steerread{grid-template-columns:1fr}.steerread .sr-d{grid-column:1}}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:14px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:18px 18px 16px;box-shadow:0 1px 2px rgba(20,30,40,.04)} .card.flag{border-left:4px solid var(--beak)}
   .card .q{color:var(--beak-deep);font-size:12.5px;font-weight:700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.03em}
@@ -1784,6 +1789,7 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
 
     moves = signature_moves(stats)
     edges = growth_edges(stats, scores)
+    steer_read = steering_reading(stats)   # Steering is described here, not scored
     moves_html = "".join(_card(tag, title, ev) for tag, title, ev in moves)
     edges_html = "".join(_card(eb, title, adv, flag=True) for eb, title, adv in edges)
 
@@ -1842,6 +1848,7 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
         "tagline": _tag,
         "context": _context,
         "scores": [[k, val, SCORE_NOTES_SHORT.get(k, "")] for k, val in scores.items()],
+        "steering": {"label": steer_read["label"], "detail": steer_read["gloss"]},
         "stats": [_first_stat,
                   [f'{v["total_prompts"]:,}', "prompts"],
                   [f'{v["tool_calls_total"]:,}', "tool calls"],
@@ -1889,19 +1896,18 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
       '<button id="share-copy" class="btn ghost" type="button">📋 Copy caption</button>'
       '<button id="share-img" class="btn ghost" type="button">🖼 Download image</button></div>')
     P('</section><h2 class="section">Your scorecard</h2>')
-    P('<div class="disclaimer"><b>How to read this.</b> These axes measure <b>how you work with AI — your '
-      'style and volume — not how good an engineer you are.</b> The <b>counts are measured</b> from your real '
-      'sessions (fact); the <b>0–10s are an opinion about style</b>, grounded in '
-      '<a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">gstack</a>, not a copy of '
-      'Paxel\'s closed algorithm. Some signals even run <b>opposite to seniority</b> — a veteran who writes '
-      'less code, gives terser prompts, or runs agents autonomously can score below a high-volume beginner. '
-      'So read it as a profile of your habits, not a skill ranking: <b>numbers = fact, scores = style, '
-      'neither = seniority.</b></div>')
+    P('<div class="disclaimer"><b>Counts are measured; the three scores are a read on your style</b>, '
+      'grounded in <a href="https://github.com/garrytan/gstack" target="_blank" rel="noopener">gstack</a> '
+      '— how you work, not a ranking of how good you are. <b>Steering isn\'t scored</b>: how hands-on you '
+      'run agents has no better or worse end, so it\'s described, not graded.</div>')
     if _evidence(stats) < 0.5:   # < ~1000 tool calls: too thin to read habits confidently
         P(f'<div class="disclaimer" style="border-left-color:var(--muted)">⚠ <b>Limited data.</b> '
           f'Just {v["total_sessions"]} sessions and {v["tool_calls_total"]:,} tool calls here — not enough to read '
           f'your habits with confidence, so these scores lean toward the middle. Run more and check back.</div>')
     P(score_rows)
+    P(f'<div class="steerread"><span class="sr-k">Steering</span>'
+      f'<span class="sr-v"><b>{_h.escape(steer_read["label"])}</b> — {_h.escape(steer_read["gloss"])}</span>'
+      f'<span class="sr-d">{_h.escape(steer_read["detail"])}</span></div>')
     if moves:
         P('<h2 class="section">Your signature moves</h2>')
         P('<p class="lead">The patterns in how you direct the AI, pulled from your real sessions. The tag on each '
@@ -2039,8 +2045,12 @@ if(ib)ib.addEventListener("click",function(){
       var g=c.createLinearGradient(barL,0,barL+bw2,0);g.addColorStop(0,beakD);g.addColorStop(1,beak);c.fillStyle=g;rr(c,barL,by,Math.max(bh,bw2*(vl/10)),bh,6);c.fill();
       c.fillStyle="#16191d";c.font="800 17px ui-monospace,Menlo,monospace";c.textAlign="right";c.fillText(Number(vl).toFixed(1),valX,ry);c.textAlign="left";
       c.fillStyle=mut;c.font="400 13px -apple-system,sans-serif";c.fillText(note,ix,ry+22);}
+    if(CARD.steering){var sry=base+sc.length*rh;                       // Steering: described, not graded — no bar, no number
+      c.fillStyle=slate;c.font="700 16px -apple-system,sans-serif";c.fillText("Steering",ix,sry);
+      c.fillStyle=beakD;c.font="700 15px -apple-system,sans-serif";c.fillText(CARD.steering.label,barL,sry);
+      c.fillStyle=mut;c.font="400 13px -apple-system,sans-serif";c.fillText(CARD.steering.detail,ix,sry+22);}
     var dvx=M+half+4;c.strokeStyle=line;c.lineWidth=1;c.beginPath();c.moveTo(dvx,scY+38);c.lineTo(dvx,scY+scH-34);c.stroke();
-    var stt=CARD.stats||[];for(var j=0;j<stt.length&&j<sc.length;j++){var syy=base+j*rh;
+    var stt=CARD.stats||[];for(var j=0;j<stt.length&&j<sc.length+1;j++){var syy=base+j*rh;
       c.fillStyle=slate;c.font="800 30px ui-monospace,Menlo,monospace";c.fillText(stt[j][0],stx,syy);var w2=c.measureText(stt[j][0]).width;
       c.fillStyle=mut;c.font="500 14px -apple-system,sans-serif";c.fillText(stt[j][1],stx+w2+12,syy);}
     var gapX=16,colW=(IW-(gc-1)*gapX)/gc;

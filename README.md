@@ -38,7 +38,7 @@ same *experience*, not byte-for-byte parity.
 One command emits a complete, **branded, shareable `profile.html`** — open it in a browser and you get:
 
 1. **An archetype** — the builder you are (Architect, Brute-Force Architect, Velocity Machine, Quality Guardian, The Director, …), named from your sessions.
-2. **A 0–10 scorecard** across **four dimensions** (Execution, Planning, Steering, Engineering), each grounded in gstack (below).
+2. **A 0–10 scorecard** across **three dimensions** (Execution, Planning, Engineering), each grounded in gstack (below) — plus a plain-language read on **how you steer agents** (long leash vs. short leash), which we *describe* instead of grade (here's why: [below](#how-scores-are-graded--grounded-in-gstack-not-an-arbitrary-scale)).
 3. **Your signature moves** — the decision-patterns in how you direct the AI ("you review more than you write", "plan wide, then grind narrow"), drawn from real session behavior and tagged to the gstack stage each expresses.
 4. **Your growth edge** — a few specific things to try next, keyed to your *own* weakest signals and the gstack skill that addresses each — not generic advice.
 5. **A "what we noticed" card grid** + Share buttons (Post on X / Copy caption / Download a **branded poster image** — archetype, scorecard, headline numbers and your highlight cards in one PNG that works in every browser).
@@ -55,14 +55,15 @@ Claude/GPT and it'll write you a deeper profile locally. That's optional; the HT
 
 ## How scores are graded — grounded in gstack, not an arbitrary scale
 
-> **Read this first — what the scores are and aren't.** These axes measure **how you work with AI
-> (your style and volume), not how good an engineer you are.** Some signals run *opposite* to
-> seniority: a veteran who writes less code, gives terser prompts, or runs agents autonomously can
-> score **below** a high-volume beginner. (That's a real result, not a hypothetical — it's why we
-> dropped the prompt-length term and reframed the scale.) Treat this as a profile of your *habits*,
-> not a skill or seniority ranking. **Numbers = fact, scores = style, neither = seniority.**
+> **What the scores are.** The **counts are measured** from your real sessions; the **three scores
+> are a read on your *style*** — how you work, grounded in gstack, not a ranking of how good an
+> engineer you are. We learned this the hard way: a fourth axis, *Steering*, used to be graded
+> `(15 − actions_per_prompt)` — which runs **backwards**, scoring a more autonomous engineer *lower*
+> (a top agentic engineer ran it and got a 1/10). You don't fix a backwards gauge by writing "this
+> may read backwards" underneath it. So **Steering is no longer scored — it's described**: we just
+> state how you run agents (long leash vs. short leash) as a fact, with no good-or-bad end.
 
-The four axes aren't a rubric we invented in a vacuum. Each one is **derived from
+The three scored axes aren't a rubric we invented in a vacuum. Each one is **derived from
 [Garry Tan's gstack](https://github.com/garrytan/gstack)** — his open-source framework that turns
 Claude Code into a virtual engineering team. gstack and YC's Paxel both come out of Garry-Tan-world,
 so grounding the scores in gstack's *actual* definitions of good building is plausibly closer to
@@ -71,10 +72,12 @@ what Paxel itself grades against — and it's a more honest story than a number 
 We then **audited the rubric by running the real gstack skills on it** — `/plan-eng-review`,
 `/plan-ceo-review`, and `/review`, dispatched as independent subagents so the tool's author wasn't
 grading their own work. That audit hardened the design: **each metric is now owned by exactly one
-axis** (so no two axes secretly move together), Execution and Steering no longer pull against each
-other, and a fifth "Product Instinct" axis — which Paxel has — was **cut**, because the review showed
-it was mostly skill-detection plus terms recycled from other axes. Coding transcripts don't honestly
-reveal product judgment, so we don't fake a score for it.
+axis** (so no two axes secretly move together), and a fifth "Product Instinct" axis — which Paxel has
+— was **cut**, because the review showed it was mostly skill-detection plus terms recycled from other
+axes. Coding transcripts don't honestly reveal product judgment, so we don't fake a score for it.
+A later validity pass went one further and **demoted Steering from a scored axis to a described one**
+(above): hands-on cadence is real and measurable, but it has no better-or-worse end, so grading it
+only ever produced a backwards number. Three honest scores beat four where one points the wrong way.
 
 gstack frames building as a sprint — **Think → Plan → Build → Review → Test → Ship → Reflect** — on
 top of three ethos pillars: **Boil the Lake** (completeness is cheap with AI, so do the complete
@@ -86,14 +89,20 @@ honestly measure from transcripts:
 | Axis | What it measures | Grounded in |
 |---|---|---|
 | **Execution** | Shipped output at AI leverage — committed-code rate (coverage-corrected, ≤1.4×, disclosed in `report.md`), **fidelity** (how much of what you generate actually lands in git), and delegation/parallelism | gstack's **Build** phase + the "Golden Age" ethos (one builder shipping like a team) |
-| **Planning** | Think-before-build — exploring before writing, prompt sophistication, reasoning depth, and plan/spec ceremony | gstack's **Think + Plan** phases + "Search Before Building" |
-| **Steering** | How hands-on you stay — short agent chains and how often the agent checks in with you. A low score means **hands-off, not out-of-control**: directing a clean autonomous run is steering too, but scoring *that* honestly needs delegation→commit attribution we don't yet measure (roadmap), so the axis note and the growth-edge copy say so plainly rather than prescribing "babysit more" | "**User Sovereignty**" — staying in the loop (hands-on cadence) |
+| **Planning** | Think-before-build — exploring before writing, reasoning depth, and plan/spec ceremony | gstack's **Think + Plan** phases + "Search Before Building" |
 | **Engineering** | Craft & low rework — getting files right early, little file-thrash, low error rate, and review/test/investigate discipline | "**Boil the Lake**" + the **Review / Test / Reflect** stages |
+
+**Steering is described, not scored.** Below the three bars you'll see a one-line read — *long
+leash* (you point the agent and let it run) → *short leash* (you stay close and course-correct) —
+with the raw cadence (actions per turn, how often the agent checked in). It maps to gstack's **User
+Sovereignty** pillar, but we don't put a 0–10 on it: a deliberate hands-off operator who delegates
+and gets clean autonomous output back is steering by a mechanism transcripts can't see (it needs
+delegation→survived-to-commit attribution — on the roadmap), so any grade would just punish autonomy.
 
 **Signature moves** (`signature_moves`) and the **growth edge** (`growth_edges`) are the same idea applied
 to prose: named decision-patterns and next-steps, each gated on a real threshold (we never pad), tied to
 a gstack stage, and keyed to *your* numbers. The growth edge points at the gstack skill that closes your
-weakest gap — e.g. low Steering → `/careful`; review ≫ test → `/qa`; file-hammering → `/investigate`.
+weakest gap — e.g. review ≫ test → `/qa`; file-hammering → `/investigate`; thin planning → `/autoplan`.
 
 How the criteria were built: one subagent per axis read the real gstack role/skill definitions
 (`office-hours`, `autoplan`, `plan-ceo-review`, `review`, `qa`, `investigate`, `ship`, `retro`, …)
