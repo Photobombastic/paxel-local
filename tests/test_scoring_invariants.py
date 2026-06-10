@@ -113,6 +113,18 @@ class TestScoringInvariants(unittest.TestCase):
         # and it must out-score the terse EXPERT on Planning (it genuinely plans more)
         self.assertGreater(p, score(P.EXPERT)["Planning"])
 
+    def test_execution_does_not_peg_for_high_input(self):
+        """No-trophy guard for Execution (mirrors Planning). A prolific shipper who commits most
+        of what they generate and delegates heavily reads HIGH but must not peg at 10.0 — _sat
+        keeps headroom. (Execution pegged at 10.0 the moment the git per-author attribution bug
+        was fixed and real committed churn was finally counted — ~24x what the old filter saw.)"""
+        high = P.make_stats(git_churn_total=560000, tool_churn_edit_write=569000,
+                            active_hours=464.0, delegate_actions=3200, background_tasks=3900,
+                            total_prompts=16000, total_sessions=545, tool_calls_total=75000)
+        e = paxel.compute_scores(high)["Execution"]
+        self.assertGreater(e, 7.5, "a prolific committed shipper should read high")
+        self.assertLess(e, 9.6, "but Execution must keep headroom — no trophy 10")
+
     def test_empty_corpus_scores_zero_not_flattering(self):
         """I6 — no activity must yield a flat 0/0/0, never a manufactured 'Quality Guardian'
         from absence-of-bad-signal."""

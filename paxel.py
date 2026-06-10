@@ -223,14 +223,46 @@ def git_churn(cwds, since_iso, until_iso):
             remote = _git(top, ["config", "remote.origin.url"]).strip()
             ident = "remote:" + remote if remote else "path:" + top
         tops.setdefault(ident, top)
+    # Who is "the user"? A repo's CURRENT user.email is unreliable — people commit under several
+    # identities (personal gmail, GitHub-noreply, per-machine locals), and the config often doesn't
+    # match the email that authored the history. Filtering to that one email silently zeroed real
+    # work (observed: a 191-commit repo read as 0 churn because its config email never authored it).
+    # Build the identity set from: every configured email (global + each repo local), machine-local
+    # author emails (always the user), authors recurring across >=2 of the user's repos, and each
+    # repo's dominant in-window author (your machine, your repo → that's you). Attribute by ANY of
+    # them (git ORs repeated --author). Better to occasionally include a co-author than to read 0.
+    tops_list = sorted(tops.values())
+    user_emails, repo_authors = set(), {}
+    author_repos = defaultdict(set)
+    gp = _git(tops_list[0], ["config", "--global", "user.email"]).strip() if tops_list else ""
+    if gp:
+        user_emails.add(gp.lower())
+    for top in tops_list:
+        loc = _git(top, ["config", "user.email"]).strip()
+        if loc:
+            user_emails.add(loc.lower())
+        authors = [a.strip().lower() for a in _git(top, [
+            "log", "--no-merges", f"--since={since_iso}", f"--until={until_iso}",
+            "--pretty=%ae"]).splitlines() if a.strip()]
+        repo_authors[top] = authors
+        for a in set(authors):
+            author_repos[a].add(top)
+    for a, repos in author_repos.items():
+        if a.endswith(".local") or a.endswith(".localdomain") or len(repos) >= 2:
+            user_emails.add(a)
+
     per_repo, ins_tot, del_tot, commits_tot = [], 0, 0, 0
-    for top in sorted(tops.values()):
-        email = _git(top, ["config", "user.email"]).strip()
+    for top in tops_list:
+        authors = repo_authors.get(top, [])
+        if not authors:
+            continue
+        mine = {a for a in set(authors) if a in user_emails}
+        mine.add(Counter(authors).most_common(1)[0][0])   # this repo's dominant in-window author = you
         args = ["log", "--numstat", "--no-merges",
                 f"--since={since_iso}", f"--until={until_iso}",
                 "--pretty=tformat:__C__"]
-        if email:
-            args.append(f"--author={email}")
+        for a in sorted(mine):
+            args.append(f"--author={a}")
         out = _git(top, args)
         ins = dels = commits = 0
         for ln in out.splitlines():
@@ -2033,22 +2065,20 @@ def compute_scores(stats):
     ev = _evidence(stats)   # 0..1 confidence; gates the inverse terms so a thin corpus
                             # can't read as flawless (no-op at ev=1.0 for any real user).
 
-    # EXECUTION — shipped output at AI leverage. Three signals, no overlap with other axes:
-    #   (a) RATE: gold-standard git churn per active hour (coverage-corrected — git often
-    #       sees only some repos; we nudge ≤1.4× by coverage rather than penalize, and the
-    #       report discloses it). (b) FIDELITY: how much of what you GENERATED actually got
-    #       committed — git churn vs tool churn — the audit's headline "are you shipping or
-    #       just exploring" signal (also coverage-corrected). (c) DELEGATION/parallelism.
-    #   Dropped vs the old version: actions_per_prompt (now in steering_reading, described
-    #   not scored) and raw session length (the audit called it noise — a long distracted
-    #   session isn't execution).
-    git_cov = max(vel["git_repos_with_commits"] / max(vel["git_repos_seen"], 1), 0.7)
-    eff_git_churn = vel["git_churn_total"] / git_cov
-    fidelity = eff_git_churn / max(vel["tool_churn_edit_write"], 1)
+    # EXECUTION — shipped output at AI leverage. Three non-overlapping signals, all rate-based
+    # (so volume-invariant) and SOFT-saturated (_sat, no trophy 10): (a) RATE — gold-standard git
+    # churn per active hour; (b) FIDELITY — how much of what you generated actually landed in
+    # committed git (git churn / tool churn); (c) DELEGATION / parallelism, per prompt. We read
+    # git churn straight now — the per-author identity fix in git_churn() made it accurate, so the
+    # old coverage inflation (which pushed fidelity past 1.0) is gone. Dropped long ago:
+    # actions_per_prompt (now described in steering_reading) and raw session length (noise).
+    git_churn = vel["git_churn_total"]
+    fidelity = git_churn / max(vel["tool_churn_edit_write"], 1)
+    deleg = b["delegate_actions"] + b["background_tasks"]
     execution = 10 * (
-        0.40 * _clamp((eff_git_churn / hours) / 400)                      # committed-code rate, coverage-corrected
-        + 0.25 * _clamp(fidelity / 0.5)                                   # ship-vs-generate fidelity (committed / generated)
-        + 0.35 * _clamp((b["delegate_actions"] + b["background_tasks"]) / max(prompts * 0.3, 1)))  # delegation/parallelism
+        0.40 * _sat(git_churn / hours, 700)              # committed-code rate (lines / active hour)
+        + 0.25 * _sat(fidelity, 0.6)                     # ship-vs-generate: how much landed in git
+        + 0.35 * _sat(deleg / prompts, 0.3))             # delegation / parallelism (per prompt)
 
     # PLANNING — think before you build. Behavior-led.
     # DROPPED the avg_prompt_length term (was 0.25): it is experience-INVERTING — expertise
@@ -2313,6 +2343,29 @@ def growth_edges(stats, scores):
                 f'git found commits in only <b>{repos_committed}</b> of the <b>{repos_seen}</b> project '
                 f'folders it saw — so most of your output never registers as "shipped." Put the untracked '
                 f'ones under version control and both your committed-rate and this score climb.'))
+
+    # REFINEMENT edges — fire off STRENGTHS, not deficits, so a strong builder still gets real
+    # next-gears (not one lonely card). Gated on genuinely high signals, ranked BELOW weakness
+    # edges (priority ~6–7), and framed to honor the style, not pathologize it.
+    deleg = b["delegate_actions"] + b["background_tasks"]
+    if b["delegate_actions"] >= 300 and deleg / prompts >= 0.2:
+        pool.append((6.6, "Mind the handoffs",
+            "Put an acceptance gate on delegated work",
+            f'You dispatched <b>{b["delegate_actions"]:,}</b> subagents and <b>{b["background_tasks"]:,}</b> '
+            f'background runs — you run a team, not a tool. The edge for heavy delegators isn\'t more '
+            f'delegation, it\'s a tighter <i>acceptance gate</i>: unreviewed agent output is where silent '
+            f'regressions hide. Make every delegated change earn a test or a review before it lands. '
+            f'(gstack\'s <code>/review</code> + <code>/qa</code> turn this into a habit.)'))
+
+    # Deep-but-CLEAN iteration: brute force done well (low errors). The thrash version (high errors)
+    # is handled above; this one honors the style and offers a single small refinement.
+    if b["iteration_depth_max"] >= 40 and err < 5:
+        pool.append((6.8, "Re-survey, don't just re-edit",
+            "On a long grind, re-read before edit #41",
+            f'You hammered one file <b>{b["iteration_depth_max"]}×</b> in a session with only ~<b>{err}</b> '
+            f'errors per 100 tool calls — that\'s deliberate brute force, not flailing, and it\'s a strength. '
+            f'The one refinement: once a file passes ~40 edits the original context has drifted, so a '
+            f'5-minute re-read of the whole file often beats edit #41. Keep the grind — just re-survey partway through.'))
 
     if not pool:
         worst = min(scores, key=scores.get) if scores else ""
