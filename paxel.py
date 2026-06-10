@@ -1921,8 +1921,7 @@ SCORE_NOTES = {
     "Execution": "How much you ship, and how fast — your committed-code rate, how much of what "
                  "you generate actually lands in git, and how hard you delegate to agents.",
     "Planning": "How much you think before you build — exploring before writing, reasoning "
-                "depth, and laying out a plan first. (Prompt length was dropped — terse expert "
-                "prompts shouldn't score below verbose ones.)",
+                "depth, and laying out a plan first.",
     "Engineering": "How clean your work is — getting files right early, not re-editing the same "
                    "one over and over, low error rate, and checking your work.",
 }
@@ -2285,6 +2284,35 @@ def growth_edges(stats, scores):
             f'Engineering is <b>{scores.get("Engineering")}</b>. Add one deliberate review-and-test pass on '
             f'every branch before you ship — that\'s where craft compounds. '
             f'(gstack\'s back half: <code>/review</code>, <code>/qa</code>, <code>/investigate</code>, <code>/retro</code>.)'))
+
+    # EXECUTION edges — Execution had NO detector, so a low-Execution builder always fell to the
+    # weak generic fallback. Diagnose WHY it's low from the actual sub-signals, and be honest that
+    # the score under-counts shell-heavy / multi-repo work (it reads COMMITTED git only).
+    exec_score = scores.get("Execution", 10)
+    gen = vel["tool_churn_edit_write"]
+    committed = vel["git_churn_total"]
+    fidelity = committed / max(gen, 1)
+    shell = vel["shell_authored_lines_est"]
+    repos_seen, repos_committed = vel["git_repos_seen"], vel["git_repos_with_commits"]
+    if exec_score < 6.5:
+        if gen >= 50000 and fidelity < 0.2:
+            # Generates a lot, commits little — most of the real work isn't landing in tracked git.
+            _shell_clause = (f', and another ~<b>{shell:,}</b> you authored straight in the shell, '
+                             f'where git can\'t see it' if shell >= 20000 else '')
+            pool.append((exec_score - 0.3, "Make it land",
+                "Commit the work you're already doing",
+                f'You generated <b>{gen:,}</b> lines but only <b>{committed:,}</b> '
+                f'(<b>{fidelity*100:.0f}%</b>) landed in committed git{_shell_clause}. Execution reads '
+                f'<i>committed code</i>, so a lot of your real shipping is invisible to it. Work inside '
+                f'tracked repos and commit as you go — the number climbs, and so does the truth of it. '
+                f'(Or know this axis simply under-counts shell-and-many-repos builders like you.)'))
+        elif repos_seen >= 4 and (repos_committed / max(repos_seen, 1)) < 0.5:
+            # git only saw commits in a minority of the project folders — most output is "untracked".
+            pool.append((exec_score - 0.2, "Track your repos",
+                "Most of your repos aren't under git",
+                f'git found commits in only <b>{repos_committed}</b> of the <b>{repos_seen}</b> project '
+                f'folders it saw — so most of your output never registers as "shipped." Put the untracked '
+                f'ones under version control and both your committed-rate and this score climb.'))
 
     if not pool:
         worst = min(scores, key=scores.get) if scores else ""
