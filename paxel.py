@@ -109,9 +109,15 @@ def parse_ts(ts):
 
 
 def line_count(s):
+    # Edit/Write content is usually a string, but a source can hand us a list of lines or
+    # some other shape — coerce so we never crash on `.count`/`.endswith` (issue #6 class).
+    if isinstance(s, list):
+        s = "\n".join(str(x) for x in s)
+    elif not isinstance(s, str):
+        s = str(s) if s else ""
     if not s:
         return 0
-    return s.count("\n") + (1 if s and not s.endswith("\n") else 0)
+    return s.count("\n") + (1 if not s.endswith("\n") else 0)
 
 
 def strip_injections(text):
@@ -124,6 +130,12 @@ def strip_injections(text):
     text = re.sub(r"<command-message>.*?</command-message>", "", text, flags=re.S)
     text = re.sub(r"<command-args>.*?</command-args>", "", text, flags=re.S)
     text = re.sub(r"<local-command-stdout>.*?</local-command-stdout>", "", text, flags=re.S)
+    # Codex injects an XML context block into the first user turn of every session
+    # (<environment_context>…cwd/shell…</environment_context>, plus the AGENTS.md
+    # <user_instructions>). Neither is a prompt the human typed — strip them so they
+    # don't get counted as prompts, skew prompt-length, or win "most-repeated prompt."
+    text = re.sub(r"<environment_context>.*?</environment_context>", "", text, flags=re.S | re.I)
+    text = re.sub(r"<user_instructions>.*?</user_instructions>", "", text, flags=re.S | re.I)
     return text.strip()
 
 
@@ -491,17 +503,26 @@ def _codex_events(fp):
         return
     sid = os.path.basename(fp).split(".")[0]
     cwd = None
-    for ev in rows:                       # first pass: session id + working dir
+    src_kind = None
+    for ev in rows:                       # first pass: session id + working dir + how it ran
         p = ev.get("payload") or {}
         if ev.get("type") == "session_meta":
             sid = p.get("id") or sid
             cwd = p.get("cwd") or cwd
+            src_kind = p.get("source") or src_kind
         elif ev.get("type") == "response_item" and p.get("type") == "function_call":
             try:
                 a = json.loads(p.get("arguments") or "{}")
                 cwd = cwd or (a.get("workdir") if isinstance(a, dict) else None)
             except Exception:
                 pass
+    # Skip NON-INTERACTIVE Codex. `codex exec` and SDK runs carry source=="exec" (often with
+    # cwd "/"); they're automation/scripting — agents, CI, factories shelling out to Codex — not
+    # a human building. ~/.codex/sessions is a global per-user store, so one person's scripts can
+    # dump thousands of these under another user's home. A builder PROFILE should reflect
+    # interactive sessions only, so these don't flood per-session metrics or "most-repeated prompt".
+    if src_kind == "exec":
+        return
     base = {"sessionId": sid, "cwd": cwd}
     for ev in rows:
         if ev.get("type") != "response_item":
@@ -1203,6 +1224,7 @@ def main():
     files_parsed = 0
     lines_total = 0
     lines_bad = 0
+    tool_input_skips = 0   # tool uses skipped because a raw input field had an unexpected type
 
     session_ts = defaultdict(list)   # sessionId -> [epoch seconds]
     session_files = defaultdict(set)
@@ -1412,6 +1434,8 @@ def main():
                                 thinking_chars += len(b.get("thinking", "") or "")
                             elif bt == "tool_use":
                                 name = b.get("name", "?")
+                                if not isinstance(name, str):
+                                    name = str(name)          # a non-str tool name can't index a Counter / .startswith
                                 inp = b.get("input", {}) if isinstance(b.get("input"), dict) else {}
                                 tool_use_total += 1
                                 tool_counter[name] += 1
@@ -1426,63 +1450,72 @@ def main():
                                     recovered_errors += 1
                                     pending_error[sid] = False
 
-                                if name == "Skill":
-                                    s = inp.get("skill")
-                                    if s:
-                                        skill_counter[s] += 1
-                                if name == "Agent":
-                                    st = inp.get("subagent_type", "general-purpose")
-                                    subagent_counter[st] += 1
-                                if name in ASK_TOOLS:
-                                    questions_asked += 1
-                                if inp.get("run_in_background"):
-                                    background_tasks += 1
-                                if name in SCHEDULE_TOOLS:
-                                    scheduled_actions += 1
+                                # Everything below reads RAW tool-input fields whose TYPE varies
+                                # by source: skill/subagent/file_path can arrive as a list/dict on
+                                # some tools, and a list is an unhashable dict key → hard crash
+                                # (the issue-#6 class, which a big enough corpus will surface).
+                                # Guard the whole churn block so one odd-shaped input skips just
+                                # THIS tool's metrics — never the entire run.
+                                try:
+                                    if name == "Skill":
+                                        s = inp.get("skill")
+                                        if s:
+                                            skill_counter[s] += 1
+                                    if name == "Agent":
+                                        st = inp.get("subagent_type", "general-purpose")
+                                        subagent_counter[st] += 1
+                                    if name in ASK_TOOLS:
+                                        questions_asked += 1
+                                    if inp.get("run_in_background"):
+                                        background_tasks += 1
+                                    if name in SCHEDULE_TOOLS:
+                                        scheduled_actions += 1
 
-                                # ---- code churn + iteration depth ----------
-                                if name == "Edit":
-                                    a = line_count(inp.get("new_string", ""))
-                                    r = line_count(inp.get("old_string", ""))
-                                    lines_added += a
-                                    lines_removed += r
-                                    fpth = inp.get("file_path")
-                                    if sid and fpth:
-                                        file_edit_run[sid][fpth] += 1
-                                elif name == "Write":
-                                    a = line_count(inp.get("content", ""))
-                                    lines_added += a
-                                    fpth = inp.get("file_path")
-                                    if sid and fpth:
-                                        file_edit_run[sid][fpth] += 1
-                                elif name == "MultiEdit":
-                                    for e in inp.get("edits", []) or []:
-                                        if isinstance(e, dict):
-                                            lines_added += line_count(e.get("new_string", ""))
-                                            lines_removed += line_count(e.get("old_string", ""))
-                                    fpth = inp.get("file_path")
-                                    if sid and fpth:
-                                        file_edit_run[sid][fpth] += 1
-                                elif name == "NotebookEdit":
-                                    lines_added += line_count(inp.get("new_source", ""))
-                                    fpth = inp.get("notebook_path")
-                                    if sid and fpth:
-                                        file_edit_run[sid][fpth] += 1
-                                elif name == "Bash":
-                                    cmd = _cmd_str(inp.get("command", ""))  # may be argv list (Codex)
-                                    if bash_writes_file(cmd):
-                                        bash_write_calls += 1
-                                        bash_authored_lines += cmd.count("\n")
-                                    if bash_runs_tests(cmd):
-                                        shell_test_runs += 1
-                                    if "git commit" in cmd:
-                                        git_commits += 1
-                                        # flush iteration-depth run for this session
-                                        if sid in file_edit_run:
-                                            for cnt in file_edit_run[sid].values():
-                                                if cnt > 0:
-                                                    edits_per_file_events.append(cnt)
-                                            file_edit_run[sid].clear()
+                                    # ---- code churn + iteration depth ----------
+                                    if name == "Edit":
+                                        a = line_count(inp.get("new_string", ""))
+                                        r = line_count(inp.get("old_string", ""))
+                                        lines_added += a
+                                        lines_removed += r
+                                        fpth = inp.get("file_path")
+                                        if sid and fpth:
+                                            file_edit_run[sid][fpth] += 1
+                                    elif name == "Write":
+                                        a = line_count(inp.get("content", ""))
+                                        lines_added += a
+                                        fpth = inp.get("file_path")
+                                        if sid and fpth:
+                                            file_edit_run[sid][fpth] += 1
+                                    elif name == "MultiEdit":
+                                        for e in inp.get("edits", []) or []:
+                                            if isinstance(e, dict):
+                                                lines_added += line_count(e.get("new_string", ""))
+                                                lines_removed += line_count(e.get("old_string", ""))
+                                        fpth = inp.get("file_path")
+                                        if sid and fpth:
+                                            file_edit_run[sid][fpth] += 1
+                                    elif name == "NotebookEdit":
+                                        lines_added += line_count(inp.get("new_source", ""))
+                                        fpth = inp.get("notebook_path")
+                                        if sid and fpth:
+                                            file_edit_run[sid][fpth] += 1
+                                    elif name == "Bash":
+                                        cmd = _cmd_str(inp.get("command", ""))  # may be argv list (Codex)
+                                        if bash_writes_file(cmd):
+                                            bash_write_calls += 1
+                                            bash_authored_lines += cmd.count("\n")
+                                        if bash_runs_tests(cmd):
+                                            shell_test_runs += 1
+                                        if "git commit" in cmd:
+                                            git_commits += 1
+                                            # flush iteration-depth run for this session
+                                            if sid in file_edit_run:
+                                                for cnt in file_edit_run[sid].values():
+                                                    if cnt > 0:
+                                                        edits_per_file_events.append(cnt)
+                                                file_edit_run[sid].clear()
+                                except (TypeError, AttributeError, ValueError, KeyError):
+                                    tool_input_skips += 1   # one weird-shaped tool input; keep going
 
         # end of file: flush any remaining edit runs as iteration-depth samples
         for sdict in file_edit_run.values():
@@ -1584,6 +1617,7 @@ def main():
             "files_parsed": files_parsed,
             "lines_total": lines_total,
             "lines_unparseable": lines_bad,
+            "tool_inputs_skipped": tool_input_skips,
             "date_range": [all_min_dt.isoformat() if all_min_dt else None,
                             all_max_dt.isoformat() if all_max_dt else None],
             "span_days": span_days,
@@ -2318,7 +2352,7 @@ _PROFILE_CSS = """<style>
   .card .q{color:var(--beak-deep);font-size:12.5px;font-weight:700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.03em}
   .card .reroll{font-family:var(--sans);text-transform:none;letter-spacing:0;font-size:11px;font-weight:600;color:var(--beak-deep);background:none;border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:8px;cursor:pointer;vertical-align:middle}
   .card .reroll:hover{background:#fff;border-color:var(--beak)}
-  .card .a{font-family:var(--serif);font-size:19px;font-weight:700;margin:0 0 6px} .card .d{color:var(--muted);font-size:13.5px;margin:0}
+  .card .a{font-family:var(--serif);font-size:19px;font-weight:700;line-height:1.25;margin:0 0 8px} .card .d{color:var(--muted);font-size:13.5px;line-height:1.5;margin:0}
   footer{margin-top:54px;padding-top:22px;border-top:1px solid var(--line);color:var(--muted);font-size:13px;line-height:1.7} footer .lock{color:var(--beak-deep);font-weight:700} footer .by{color:var(--text)}
 </style>"""
 
@@ -2368,8 +2402,6 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     mtot = sum(n for _, n in models) or 1
     model_a = _h.escape(" → ".join(_pretty_model(m) for m, _ in models[:2]) or "—")
     model_d = _h.escape((", ".join(f"{_pretty_model(m)} {round(n/mtot*100)}%" for m, n in models[:2]) + " of turns.") if models else "—")
-    top_tool = (t["top_tools"][0] if t["top_tools"] else ["—", 0])
-    top_tool_name = _h.escape(str(top_tool[0]))
     sess = max(v["total_sessions"], 1)
     prompts = max(v["total_prompts"], 1)
     per_sess = round(b["delegate_actions"] / sess, 1)
@@ -2404,8 +2436,28 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     agent_a = "Like a teammate" if teammate else "Like a tool"
     agent_d = ('You bounce ideas off it and ask for pushback — more collaborator than command line.'
                if teammate else 'You hand it work and check the result — more command line than collaborator.')
+    # "What do you build with?" — the source mix (which agent CLIs the corpus came from).
+    # Doubles as a self-diagnostic: a tool you don't use showing up = phantom/automation data.
+    _SRC_NAMES = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI",
+                  "pi": "Pi", "opencode": "opencode", "cursor": "Cursor"}
+    _srcs = sorted(((k, d.get("sessions", 0)) for k, d in (c.get("sources") or {}).items()
+                    if d.get("sessions")), key=lambda kv: -kv[1])
+    _sstot = sum(n for _, n in _srcs) or 1
+    if not _srcs:
+        build_a, build_d = "—", "No interactive sessions detected."
+    elif len(_srcs) == 1:
+        build_a = _h.escape(_SRC_NAMES.get(_srcs[0][0], _srcs[0][0]))
+        build_d = (f'All {_srcs[0][1]:,} of your sessions ran in {build_a} — '
+                   f'that’s your whole footprint here.')
+    else:
+        build_a = "Mostly " + _h.escape(_SRC_NAMES.get(_srcs[0][0], _srcs[0][0]))
+        _mix = " · ".join(f'{_h.escape(_SRC_NAMES.get(k, k))} {round(n / _sstot * 100)}%'
+                               for k, n in _srcs[:4])
+        build_d = f'Your session mix: {_mix}.'
+
     # "What we noticed" — question-framed eyebrows + plain second-person copy (no jargon).
     cards = [
+        _card("What do you build with?", build_a, build_d),
         _card("How much did you ship?", "Depends how you count",
               f'Edit/Write touched <b>{vel["tool_churn_edit_write"]:,}</b> lines and the shell ~{vel["shell_authored_lines_est"]:,} '
               f'more — but only <b>{vel["git_churn_total"]:,}</b> actually landed in committed git history. '
@@ -2425,7 +2477,6 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
         _card("How polite are you to it?", polite_a, polite_d),
         _card("What's your longest run?", longrun_a,
               'Your longest unbroken stretch of active work in a single session.'),
-        _card("What's your go-to tool?", top_tool_name, f'{top_tool[1]:,} calls — more than any other tool.'),
     ]
 
     score_rows = "".join(
