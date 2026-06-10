@@ -133,7 +133,20 @@ def strip_injections(text):
 _REDIR = re.compile(r'(?<!2)>{1,2}(?!\s*(?:/dev/null|&\d))')
 
 
+def _cmd_str(v):
+    """A Bash 'command' usually arrives as a string, but some sources store it as an argv
+    LIST — Codex's local_shell_call carries ["bash","-lc","…"]. Join lists with spaces so the
+    string-based redirect/heredoc/test regexes work (and never crash on a non-string). Other
+    types degrade to '' rather than blowing up the whole run on one odd transcript."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return " ".join(str(x) for x in v)
+    return str(v) if v else ""
+
+
 def bash_writes_file(cmd):
+    cmd = _cmd_str(cmd)
     return bool(_REDIR.search(cmd)
                 or re.search(r'<<(?!<)', cmd)            # heredoc, not a <<< here-string
                 or re.search(r'\bsed\s+-i', cmd)
@@ -162,7 +175,7 @@ _SHELL_TEST_RE = re.compile(
 
 
 def bash_runs_tests(cmd):
-    return bool(_SHELL_TEST_RE.search(cmd or ""))
+    return bool(_SHELL_TEST_RE.search(_cmd_str(cmd)))
 
 
 def _git(cwd, args, timeout=30):
@@ -1456,7 +1469,7 @@ def main():
                                     if sid and fpth:
                                         file_edit_run[sid][fpth] += 1
                                 elif name == "Bash":
-                                    cmd = inp.get("command", "") or ""
+                                    cmd = _cmd_str(inp.get("command", ""))  # may be argv list (Codex)
                                     if bash_writes_file(cmd):
                                         bash_write_calls += 1
                                         bash_authored_lines += cmd.count("\n")

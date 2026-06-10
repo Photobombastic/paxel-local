@@ -148,6 +148,19 @@ class TestUnits(unittest.TestCase):
         self.assertEqual(paxel._canon_tool("read"), "Read")
         self.assertEqual(paxel._canon_tool("edit"), "Edit")
 
+    def test_bash_command_as_argv_list_does_not_crash(self):
+        # Regression for issue #6: Codex's local_shell_call stores the command as an argv
+        # LIST (["bash","-lc","…"]), which crashed bash_writes_file/bash_runs_tests with
+        # "TypeError: expected string or bytes-like object, got 'list'". _cmd_str joins it.
+        self.assertEqual(paxel._cmd_str(["bash", "-lc", "echo hi > f.txt"]),
+                         "bash -lc echo hi > f.txt")
+        self.assertEqual(paxel._cmd_str("echo hi"), "echo hi")
+        self.assertEqual(paxel._cmd_str(None), "")
+        # the joined string still triggers the redirect + test detectors (don't crash, stay correct)
+        self.assertTrue(paxel.bash_writes_file(["bash", "-lc", "echo hi > f.txt"]))
+        self.assertTrue(paxel.bash_runs_tests(["uv", "run", "pytest", "-q"]))
+        self.assertFalse(paxel.bash_writes_file(["ls", "-la"]))
+
     def test_cursor_tool_name_maps_cursor_tools(self):
         # SQLite-era snake_case names
         self.assertEqual(paxel._cursor_tool_name("read_file_v2"), "Read")
