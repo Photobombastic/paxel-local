@@ -171,6 +171,21 @@ HANDS_OFF_DELEGATOR = dict(
 )
 HANDS_ON_TWIN = {**HANDS_OFF_DELEGATOR, "actions_per_prompt": 3.0}
 
+# A genuinely EXTREME planner (Max-like real data): very high explore-before-build ratio,
+# deep reasoning on nearly every prompt, heavy plan-skill ceremony. Planning should read HIGH
+# — but must NOT peg at a trophy 10.0. Freezes the recalibration that replaced Planning's hard
+# clamp (which let real high-planner data hit a flat 10.0) with soft saturation + per-prompt
+# denominators. The no-trophy ethos: 10 means "nobody plans more," reserved, basically unhit.
+HIGH_PLANNER = dict(
+    total_sessions=500, tool_calls_total=60000, total_prompts=16000, thinking_blocks=25000,
+    planning_ratio_explore_to_doing=0.9, iteration_depth_mean=2.5, iteration_depth_p90=4.0,
+    files_hammered_over_15x=10, error_rate_per_100_tools=3.0, delegate_actions=200,
+    background_tasks=80, actions_per_prompt=8.0, questions_asked=300, shell_test_runs=40,
+    active_hours=460.0, git_repos_with_commits=4, git_repos_seen=12, git_churn_total=25000,
+    tool_churn_edit_write=400000, shell_authored_lines_est=170000,
+    top_skills=(("plan", 1200), ("brainstorm", 800), ("spec", 400), ("code-review", 2000)),
+)
+
 # No activity at all. Must score a flat 0/0/0 — never a flattering default (e.g. the old
 # "Quality Guardian 9.0" that absence-of-bad-signal used to manufacture).
 EMPTY = dict(total_sessions=0, tool_calls_total=0)

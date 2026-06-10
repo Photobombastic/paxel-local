@@ -102,6 +102,17 @@ class TestScoringInvariants(unittest.TestCase):
         on = paxel.steering_reading(P.make_stats(**P.HANDS_ON_TWIN))
         self.assertNotEqual(off["label"], on["label"])
 
+    def test_planning_does_not_peg_for_high_input(self):
+        """No-trophy guard (freezes the Planning recalibration). A genuinely extreme planner
+        scores HIGH but must NOT peg at a perfect 10.0 — the soft-saturation curve + per-prompt
+        denominators keep headroom so 'even more' is always representable. (Pre-fix, real
+        high-planner data hit a flat 10.0 once a session-count dilution bug was removed.)"""
+        p = score(P.HIGH_PLANNER)["Planning"]
+        self.assertGreater(p, 7.5, "an extreme planner should still read high")
+        self.assertLess(p, 9.6, "but Planning must keep headroom — no trophy 10")
+        # and it must out-score the terse EXPERT on Planning (it genuinely plans more)
+        self.assertGreater(p, score(P.EXPERT)["Planning"])
+
     def test_empty_corpus_scores_zero_not_flattering(self):
         """I6 — no activity must yield a flat 0/0/0, never a manufactured 'Quality Guardian'
         from absence-of-bad-signal."""

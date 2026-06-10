@@ -1940,6 +1940,19 @@ def _clamp(x):
     return max(0.0, min(1.0, x))
 
 
+def _sat(x, target):
+    """Diminishing-returns saturation toward — but never reaching — 1.0. At x==target it
+    returns 0.8; 2x→0.89, 4x→0.94. Replaces _clamp(x/target) for score terms where a hard
+    ceiling let real-but-extreme inputs PEG at a flattering perfect score. Monotonic (more
+    always scores slightly more), so the top of the scale still differentiates — no trophy
+    10s, but no flat top either. (See Planning: it pegged at 10.0 once a session-count
+    dilution bug was removed; this curve keeps headroom.)"""
+    if target <= 0:
+        return 0.0
+    r = max(0.0, x / target)
+    return r / (r + 0.25)
+
+
 def _d10(x):
     """First 10 chars of an ISO date, or '—' when missing (empty/timestampless corpus)."""
     return (x or "")[:10] or "—"
@@ -2046,10 +2059,17 @@ def compute_scores(stats):
     plan_skills = _skill_uses_any(stats, ("brainstorm", "writing-plan", "plan", "spec",
                                           "office-hours", "autoplan", "grill", "ceo-review",
                                           "eng-review", "design-review"))
+    # SOFT saturation (_sat, no hard ceiling) + PER-PROMPT (not per-session) denominators.
+    # Per-session was fragile: automation/tooling inflates session counts and silently moved
+    # this score (the non-interactive-Codex dilution suppressed it to 6.9, then it PEGGED at a
+    # trophy 10.0 once that was fixed). Prompts are the stable unit, and per-prompt rates are
+    # inherently volume-invariant (numerator and denominator scale together). _sat keeps the
+    # top of the scale differentiating so an extreme planner edges out a merely-high one
+    # without anyone hitting a flat 10. (Guarded by test_planning_does_not_peg_for_high_input.)
     planning = 10 * (
-        0.45 * _clamp(b["planning_ratio_explore_to_doing"] / 0.65)        # explore-before-build (behavioral)
-        + 0.30 * _clamp((v["thinking_blocks"] / sess) / 12.0)           # reasoning depth per session
-        + 0.25 * _clamp((plan_skills / sess) / 0.8))                     # plan/spec ceremony (toolchain-biased → kept lowest)
+        0.45 * _sat(b["planning_ratio_explore_to_doing"], 0.70)         # explore-before-build (ratio; denominator-free)
+        + 0.30 * _sat(v["thinking_blocks"] / prompts, 1.0)              # reasoning depth, per prompt
+        + 0.25 * _sat(plan_skills / prompts, 0.06))                     # plan/spec ceremony, per prompt
 
     # STEERING IS NOT SCORED — it's DESCRIBED (see steering_reading). Hands-on cadence
     # (actions/prompt + how often the agent checks in) is real and measurable, but it has no
