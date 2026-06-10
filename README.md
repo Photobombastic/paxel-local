@@ -123,7 +123,7 @@ Auto-detected and parsed (all reads local):
 | Tool | Location | Status |
 |---|---|---|
 | **Claude Code** | `~/.claude/projects` | full |
-| **Codex CLI** | `~/.codex/sessions` | full |
+| **Codex CLI** | `~/.codex/sessions` | full — *interactive only* (see below) |
 | **Gemini CLI** | `~/.gemini/tmp` | full |
 | **Pi** | `~/.pi/agent/sessions` | full |
 | **opencode** | `~/.local/share/opencode/storage` | full |
@@ -131,6 +131,14 @@ Auto-detected and parsed (all reads local):
 
 Non-Claude formats are translated into a common event shape so every metric works across
 tools (Claude/Pi-specific signals like skills/subagents/thinking are naturally richer).
+
+> **paxel profiles *you*, not your bots.** Non-interactive Codex runs — `codex exec` and SDK
+> calls (`source:"exec"`, usually `cwd:"/"`) — are automation/scripting, not a human building,
+> so they're excluded. `~/.codex/sessions` is a *global per-user* store, so a factory/agent
+> shelling out to Codex can pile up thousands of these under your home dir; counting them would
+> drown your real sessions and skew every per-session metric. Interactive Codex still counts in full.
+> (Models reached *via OpenRouter or any router* surface under whichever tool persisted the
+> session — they aren't a separate source.)
 
 ## Run it
 
@@ -209,6 +217,10 @@ Honest about what it can't see. If you can close one of these, open a PR:
   content never appears in the transcript, so the shell-authored estimate misses it. Git churn
   catches it *if* it was committed in a repo still on disk.
 - **`~/.claude/history.jsonl`** (a separate flat prompt log) isn't parsed yet.
+- **Execution under-counts shell-heavy / many-repo builders.** It reads *committed git churn*, so
+  work authored in the shell (heredocs/redirects) or living in repos that aren't under version
+  control (or whose `.git` isn't on disk) doesn't register as "shipped." The profile says so
+  directly when it bites — but a low Execution can be a measurement gap, not a real one.
 - **Cursor workspace slugs** — project `cwd` is reconstructed from the folder slug
   (`Users-you-dev-foo` → `/Users/you/dev/foo`); usernames or paths with dashes may mis-parse.
 - **Cursor JSONL carries no timestamps, models, or tool error statuses** — sessions also present
