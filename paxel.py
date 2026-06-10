@@ -1456,7 +1456,8 @@ def main():
                                     if sid and fpth:
                                         file_edit_run[sid][fpth] += 1
                                 elif name == "Bash":
-                                    cmd = inp.get("command", "") or ""
+                                    _raw_cmd = inp.get("command", "") or ""
+                                    cmd = " ".join(_raw_cmd) if isinstance(_raw_cmd, list) else _raw_cmd
                                     if bash_writes_file(cmd):
                                         bash_write_calls += 1
                                         bash_authored_lines += cmd.count("\n")
