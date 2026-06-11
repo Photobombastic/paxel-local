@@ -208,21 +208,32 @@ def git_churn(cwds, since_iso, until_iso):
     """
     # Dedupe by repo IDENTITY (root-commit SHA), not path — otherwise multiple
     # clones/worktrees of the same project (e.g. a fork + a worktree + a copy)
-    # each contribute the same commits and inflate the total.
-    tops = {}                       # identity -> toplevel path (first seen)
+    # each contribute the same commits and inflate the total. But when a repo IS cloned in
+    # several places, keep the RICHEST clone (most in-window commits), not whichever we saw
+    # first: clones drift to different HEADs, so "first seen" made the total non-deterministic —
+    # it flipped with cwd order (observed: a stale clone of one repo reads 0 churn while the live
+    # clone reads thousands). Picking the richest clone is deterministic and uses the full history.
+    best = {}                       # identity -> (in-window commit count, toplevel path)
+    seen_top = set()
     for cwd in cwds:
         if not cwd or not os.path.isdir(cwd):
             continue
         top = _git(cwd, ["rev-parse", "--show-toplevel"]).strip()
-        if not top:
+        if not top or top in seen_top:
             continue
+        seen_top.add(top)
         root = _git(top, ["rev-list", "--max-parents=0", "HEAD"]).split()
         if root:
             ident = "root:" + ",".join(sorted(root))
         else:
             remote = _git(top, ["config", "remote.origin.url"]).strip()
             ident = "remote:" + remote if remote else "path:" + top
-        tops.setdefault(ident, top)
+        nc = _git(top, ["rev-list", "--count", "--no-merges",
+                        f"--since={since_iso}", f"--until={until_iso}", "HEAD"]).strip()
+        nc = int(nc) if nc.isdigit() else 0
+        if ident not in best or nc > best[ident][0]:
+            best[ident] = (nc, top)
+    tops = {ident: t for ident, (_nc, t) in best.items()}
     # Who is "the user"? A repo's CURRENT user.email is unreliable — people commit under several
     # identities (personal gmail, GitHub-noreply, per-machine locals), and the config often doesn't
     # match the email that authored the history. Filtering to that one email silently zeroed real
