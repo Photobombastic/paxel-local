@@ -535,25 +535,27 @@ def _codex_events(fp):
         return
     sid = os.path.basename(fp).split(".")[0]
     cwd = None
-    src_kind = None
+    src_kind = originator = None
     for ev in rows:                       # first pass: session id + working dir + how it ran
         p = ev.get("payload") or {}
         if ev.get("type") == "session_meta":
             sid = p.get("id") or sid
             cwd = p.get("cwd") or cwd
             src_kind = p.get("source") or src_kind
+            originator = p.get("originator") or originator
         elif ev.get("type") == "response_item" and p.get("type") == "function_call":
             try:
                 a = json.loads(p.get("arguments") or "{}")
                 cwd = cwd or (a.get("workdir") if isinstance(a, dict) else None)
             except Exception:
                 pass
-    # Skip NON-INTERACTIVE Codex. `codex exec` and SDK runs carry source=="exec" (often with
-    # cwd "/"); they're automation/scripting — agents, CI, factories shelling out to Codex — not
-    # a human building. ~/.codex/sessions is a global per-user store, so one person's scripts can
-    # dump thousands of these under another user's home. A builder PROFILE should reflect
-    # interactive sessions only, so these don't flood per-session metrics or "most-repeated prompt".
-    if src_kind == "exec":
+    # Skip Codex AUTOMATION — but NOT a human's `codex exec` one-shots. SDK runs (originator
+    # codex_sdk_ts) and exec runs with no real project (cwd "/" or empty) are bots / CI / factories
+    # shelling out to Codex; ~/.codex is a global per-user store so they pile up by the thousand.
+    # But `codex exec` IN A REAL PROJECT is how plenty of people actually drive Codex, so it counts.
+    # (An over-broad source=="exec" filter wrongly zeroed heavy `codex exec` users → they got
+    # "misclassified as a Gemini user" when Codex was their main tool.)
+    if src_kind == "exec" and (originator == "codex_sdk_ts" or not cwd or cwd == "/"):
         return
     base = {"sessionId": sid, "cwd": cwd}
     for ev in rows:
@@ -2537,24 +2539,28 @@ def write_profile_html(stats, archetype, quote, scores, voice=None):
     agent_a = "Like a teammate" if teammate else "Like a tool"
     agent_d = ('You bounce ideas off it and ask for pushback — more collaborator than command line.'
                if teammate else 'You hand it work and check the result — more command line than collaborator.')
-    # "What do you build with?" — the source mix (which agent CLIs the corpus came from).
-    # Doubles as a self-diagnostic: a tool you don't use showing up = phantom/automation data.
+    # "What do you build with?" — the source mix. Ranked by PROMPTS (actual usage), not raw
+    # session count: "session" means different things per tool (Codex = 1 per rollout file, others
+    # bundle), so session-count misrepresents who you really lean on. Prompts = how much you
+    # actually drove each tool. Doubles as a self-diagnostic: a tool you don't use showing up
+    # would flag phantom/automation data.
     _SRC_NAMES = {"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI",
                   "pi": "Pi", "opencode": "opencode", "cursor": "Cursor"}
-    _srcs = sorted(((k, d.get("sessions", 0)) for k, d in (c.get("sources") or {}).items()
-                    if d.get("sessions")), key=lambda kv: -kv[1])
-    _sstot = sum(n for _, n in _srcs) or 1
+    _used = [(k, d.get("prompts", 0), d.get("sessions", 0))
+             for k, d in (c.get("sources") or {}).items() if d.get("sessions")]
+    _by_prompts = any(p for _, p, _ in _used)   # fall back to sessions if no prompts parsed at all
+    _srcs = sorted(((k, (p if _by_prompts else s)) for k, p, s in _used), key=lambda kv: -kv[1])
+    _tot = sum(n for _, n in _srcs) or 1
     if not _srcs:
         build_a, build_d = "—", "No interactive sessions detected."
-    elif len(_srcs) == 1:
+    elif len(_srcs) == 1 or _srcs[1][1] == 0:
         build_a = _h.escape(_SRC_NAMES.get(_srcs[0][0], _srcs[0][0]))
-        build_d = (f'All {_srcs[0][1]:,} of your sessions ran in {build_a} — '
-                   f'that’s your whole footprint here.')
+        build_d = f'Everything you build here runs in {build_a}.'
     else:
         build_a = "Mostly " + _h.escape(_SRC_NAMES.get(_srcs[0][0], _srcs[0][0]))
-        _mix = " · ".join(f'{_h.escape(_SRC_NAMES.get(k, k))} {round(n / _sstot * 100)}%'
-                               for k, n in _srcs[:4])
-        build_d = f'Your session mix: {_mix}.'
+        _mix = " · ".join(f'{_h.escape(_SRC_NAMES.get(k, k))} {round(n / _tot * 100)}%'
+                          for k, n in _srcs[:4] if round(n / _tot * 100) > 0)
+        build_d = f'Your tool mix by {"prompts" if _by_prompts else "sessions"}: {_mix}.'
 
     # "What we noticed" — question-framed eyebrows + plain second-person copy (no jargon).
     cards = [

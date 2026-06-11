@@ -171,30 +171,30 @@ class TestUnits(unittest.TestCase):
         self.assertEqual(
             paxel.strip_injections("<user_instructions>be terse</user_instructions>\nhi"), "hi")
 
-    def test_codex_exec_sessions_excluded(self):
-        # Non-interactive Codex (source=="exec": `codex exec` / SDK automation) must NOT count
-        # as builder sessions — they flood ~/.codex with machine-driven runs (issue: a corpus
-        # showing 3,504 "codex" sessions that were all SDK automation, not the human coding).
-        with tempfile.TemporaryDirectory() as td:
-            exec_fp = os.path.join(td, "rollout-exec.jsonl")
-            with open(exec_fp, "w") as f:
-                f.write(json.dumps({"type": "session_meta", "payload": {
-                    "id": "x1", "cwd": "/", "source": "exec"}}) + "\n")
-                f.write(json.dumps({"type": "response_item", "payload": {
-                    "type": "message", "role": "user",
-                    "content": [{"type": "input_text", "text": "do a thing"}]}}) + "\n")
-            self.assertEqual(list(paxel._codex_events(exec_fp)), [],
-                             "source=='exec' Codex session should yield no events")
-            # a session WITHOUT source==exec still parses normally
-            ok_fp = os.path.join(td, "rollout-tui.jsonl")
-            with open(ok_fp, "w") as f:
-                f.write(json.dumps({"type": "session_meta", "payload": {
-                    "id": "x2", "cwd": "/proj", "source": "cli"}}) + "\n")
-                f.write(json.dumps({"type": "response_item", "payload": {
-                    "type": "message", "role": "user",
-                    "content": [{"type": "input_text", "text": "real interactive prompt"}]}}) + "\n")
-            self.assertTrue(list(paxel._codex_events(ok_fp)),
-                            "interactive Codex session should still yield events")
+    def test_codex_automation_excluded_but_human_exec_kept(self):
+        # Skip Codex AUTOMATION (SDK runs, or exec runs with no real project) — they flood
+        # ~/.codex (a global per-user store) with machine-driven sessions. But a HUMAN running
+        # `codex exec` in a real project IS real usage and must count — an over-broad
+        # source=="exec" filter wrongly zeroed heavy codex-exec users ("misclassified as Gemini").
+        def events(meta):
+            with tempfile.TemporaryDirectory() as td:
+                fp = os.path.join(td, "r.jsonl")
+                with open(fp, "w") as f:
+                    f.write(json.dumps({"type": "session_meta", "payload": meta}) + "\n")
+                    f.write(json.dumps({"type": "response_item", "payload": {
+                        "type": "message", "role": "user",
+                        "content": [{"type": "input_text", "text": "fix the bug"}]}}) + "\n")
+                return list(paxel._codex_events(fp))
+        # automation → excluded
+        self.assertEqual(events({"id": "a", "source": "exec",
+                                 "originator": "codex_sdk_ts", "cwd": "/"}), [], "SDK run excluded")
+        self.assertEqual(events({"id": "b", "source": "exec",
+                                 "originator": "codex_exec", "cwd": "/"}), [], "rootless exec excluded")
+        # real human usage → kept
+        self.assertTrue(events({"id": "c", "source": "exec", "originator": "codex_exec",
+                                "cwd": "/Users/x/myproj"}), "human `codex exec` in a project must count")
+        self.assertTrue(events({"id": "d", "source": "cli", "cwd": "/Users/x/proj"}),
+                        "interactive Codex must count")
 
     def test_line_count_survives_non_string_content(self):
         # Same issue-#6 class on edit content: new_string/content can be a list or other
